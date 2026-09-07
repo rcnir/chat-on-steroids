@@ -29,7 +29,7 @@ const installedUpdater = path.join(dataDir, 'rocaniiru-updater.js');
 const configPath = path.join(dataDir, 'config.json');
 const statePath = path.join(dataDir, 'state.json');
 const extensionId = 'lcggilneomlkgcaeniefpkadadpfbgfn';
-const patchCommit = 'a871b31cca4240121d351a93bf38c5b822335ae9';
+const patchCommit = '5a472850f234c77a893a99c36bcdde4b081a38bc';
 const adoptCurrentPatch = process.argv.includes('--adopt-current-patch');
 
 function plistValue(key) {
