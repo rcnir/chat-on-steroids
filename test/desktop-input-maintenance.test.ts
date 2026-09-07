@@ -31,6 +31,7 @@ async function worker(inputs: Array<{ id: string; conversationId: string | null 
       ? { app: 'chat-on-steroids', bridge: BRIDGE_PROTOCOL, compatible: true, paired: true }
       : { ok: true, inputs, background: true, modelCatalogRequest }
   }));
+  const executeScript = vi.fn(async () => []);
   const context = vm.createContext({
     chrome: {
       storage: { local, session },
@@ -38,7 +39,7 @@ async function worker(inputs: Array<{ id: string; conversationId: string | null 
       runtime: { getManifest: () => ({ version: '2.0.5' }), onMessage: event, onInstalled: event, onStartup: event },
       tabs: { query: async () => [...tabs], get: async (id: number) => tabs.find(tab => tab.id === id), remove, create, update, sendMessage, onCreated: event, onUpdated: event, onRemoved: event },
       alarms: { onAlarm: event, create: () => {}, clear: async () => true },
-      scripting: { executeScript: async () => [], insertCSS: async () => {} }
+      scripting: { executeScript, insertCSS: async () => {} }
     },
     fetch, URL, URLSearchParams, AbortController, setTimeout, clearTimeout, TextEncoder, console
   });
@@ -46,7 +47,7 @@ async function worker(inputs: Array<{ id: string; conversationId: string | null 
   const api = context.testMaintenance as { applyRequestedBrowserPreferences(request: object): Promise<void>; authorizeDocument(sender: unknown, message: unknown): Promise<any>; catalog(message: unknown, sender: unknown, source: unknown): Promise<any>; load(): Promise<void>; maintain(): Promise<void>; createChatTab(url: string, background: boolean): Promise<Tab> };
   await api.load();
   vm.runInContext('Object.assign(testMaintenance, { offerStopTurns, noteTabConversation, ackCommand })', context);
-  return { ...api, update, inspectModels: (context.testMaintenance as any).inspectRequestedModels as (request: unknown, background: boolean) => Promise<void>, ackDesktopInput: (context.testMaintenance as any).ackDesktopInput as (...args: string[]) => Promise<any>, drainCommandAcks: (context.testMaintenance as any).drainCommandAcks as () => Promise<any>, desktopInput: (context.testMaintenance as any).desktopInput as (...args: any[]) => Promise<any>, events: (context.testMaintenance as any).events as (message: any, sender: any, source: any) => Promise<any>, create, sendMessage, tabs, fetch, windows, remove, local, localSaved, saved };
+  return { ...api, update, inspectModels: (context.testMaintenance as any).inspectRequestedModels as (request: unknown, background: boolean) => Promise<void>, ackDesktopInput: (context.testMaintenance as any).ackDesktopInput as (...args: string[]) => Promise<any>, drainCommandAcks: (context.testMaintenance as any).drainCommandAcks as () => Promise<any>, desktopInput: (context.testMaintenance as any).desktopInput as (...args: any[]) => Promise<any>, events: (context.testMaintenance as any).events as (message: any, sender: any, source: any) => Promise<any>, create, sendMessage, executeScript, tabs, fetch, windows, remove, local, localSaved, saved };
 }
 
 describe('one browser maintenance flight per desktop outbox publication', () => {
@@ -101,15 +102,20 @@ describe('one browser maintenance flight per desktop outbox publication', () => 
     h.tabs.push({ id: 8, url: `https://chatgpt.com/c/${secondId}` });
     await h.inspectModels({ nonce: firstId, expiresAt: Date.now() + 30000 }, true);
     expect(h.sendMessage).toHaveBeenCalledWith(8, expect.objectContaining({ type: 'clf-model-catalog', nonce: firstId }));
+    expect(h.executeScript).toHaveBeenCalledWith({ target: { tabId: 8 }, files: ['chatgpt-dom.js'] });
     expect(h.create).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
     expect(h.remove).not.toHaveBeenCalled();
   });
-  it('keeps catalog discovery minimized and unfocused even when foreground chats are preferred', async () => {
+  it('never opens a ChatGPT tab for catalog discovery when none is already open', async () => {
     const h = await worker([]);
     await h.inspectModels({ nonce: firstId, expiresAt: Date.now() + 30000 }, false);
-    expect(h.windows.create).toHaveBeenCalledWith(expect.objectContaining({ focused: false, state: 'minimized' }));
+    expect(h.create).not.toHaveBeenCalled();
+    expect(h.windows.create).not.toHaveBeenCalled();
     expect(h.windows.update).not.toHaveBeenCalled();
+    const report = h.fetch.mock.calls.find(([url]) => new URL(url).pathname === '/models');
+    expect(report).toBeTruthy();
+    expect(JSON.parse(String(report?.[1]?.body))).toMatchObject({ nonce: firstId, models: null, error: 'picker_unavailable' });
   });
   it('places an offered worker in its unfocused background window with discard protection', async () => {
     const h = await worker([]);
@@ -128,15 +134,18 @@ describe('one browser maintenance flight per desktop outbox publication', () => 
     await h.maintain();
     expect(h.create).toHaveBeenCalledTimes(1);
   });
-  it('reuses a warm catalog across requests without navigation or closing it', async () => {
+  it('prefers an existing normal ChatGPT tab and retires a legacy marked catalog helper', async () => {
     const h = await worker([]);
-    h.tabs.push({ id: 7, url: `https://chatgpt.com/?cos-model-catalog=${firstId}` }, { id: 8, url: `https://chatgpt.com/c/${secondId}` });
+    const helper = `https://chatgpt.com/?cos-model-catalog=${firstId}`;
+    h.tabs.push({ id: 7, url: helper }, { id: 8, url: `https://chatgpt.com/c/${secondId}` });
+    await h.authorizeDocument({ tab: { id: 7 }, documentId: 'helper', frameId: 0, url: helper }, { navigationEpoch: 1 });
+    h.sendMessage.mockImplementation(async (_id, message) => message.type === 'clf-tab-close-check'
+      ? { ok: true, safe: true, conversationId: null, navigationEpoch: 1 } as never : { ok: true, ready: true });
     await h.inspectModels({ nonce: secondId, expiresAt: Date.now() + 60000 }, true);
     expect(h.create).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
-    expect(h.sendMessage).toHaveBeenCalledWith(7, expect.objectContaining({ type: 'clf-model-catalog', nonce: secondId }));
-    await h.inspectModels(null, true);
-    expect(h.remove).not.toHaveBeenCalled();
+    expect(h.sendMessage).toHaveBeenCalledWith(8, expect.objectContaining({ type: 'clf-model-catalog', nonce: secondId }));
+    expect(h.remove.mock.calls).toEqual([[7]]);
   });
   it('preserves a draft on a catalog marker and waits for unreachable old helpers instead of accumulating tabs', async () => {
     const h = await worker([]);
@@ -153,15 +162,17 @@ describe('one browser maintenance flight per desktop outbox publication', () => 
     h.tabs.push({ id: 8, url: `https://chatgpt.com/?cos-model-catalog=${secondId}` }, { id: 7, url: `https://chatgpt.com/?cos-model-catalog=${firstId}` },
       { id: 9, url: `https://chatgpt.com/c/${firstId}` }, { id: 10, url: 'https://chatgpt.com/?cos-model-catalog=personal' });
     await h.authorizeDocument({ tab: { id: 8 }, documentId: 'duplicate', frameId: 0, url: h.tabs[0]!.url }, { navigationEpoch: 1 });
+    await h.authorizeDocument({ tab: { id: 7 }, documentId: 'keeper', frameId: 0, url: h.tabs[1]!.url }, { navigationEpoch: 1 });
     h.sendMessage.mockImplementation(async (_id, message) => message.type === 'clf-tab-close-check'
       ? { ok: true, safe: true, conversationId: null, navigationEpoch: 1 } as never : { ok: true, ready: true });
     h.remove.mockImplementation(async id => { h.tabs.splice(h.tabs.findIndex(tab => tab.id === id), 1); });
     await h.inspectModels({ nonce: secondId, expiresAt: Date.now() + 60000 }, true);
-    expect(h.sendMessage).toHaveBeenCalledWith(7, expect.objectContaining({ type: 'clf-model-catalog' }));
+    expect(h.sendMessage).toHaveBeenCalledWith(9, expect.objectContaining({ type: 'clf-model-catalog' }));
     expect(h.sendMessage).toHaveBeenCalledWith(8, { type: 'clf-tab-close-check', conversationId: null }, { documentId: 'duplicate' });
-    expect(h.remove.mock.calls).toEqual([[8]]);
+    expect(h.sendMessage).toHaveBeenCalledWith(7, { type: 'clf-tab-close-check', conversationId: null }, { documentId: 'keeper' });
+    expect(h.remove.mock.calls).toEqual([[8], [7]]);
     await h.inspectModels(null, true);
-    expect(h.remove).toHaveBeenCalledTimes(1);
+    expect(h.remove).toHaveBeenCalledTimes(2);
     expect(h.create).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
   });
@@ -295,20 +306,15 @@ describe('one browser maintenance flight per desktop outbox publication', () => 
     expect((await h.catalog(message, sender, source)).ok).toBe(false);
     expect(h.remove).not.toHaveBeenCalled();
   });
-  it('opens one owned blank catalog tab without blocking maintenance on DOM inspection', async () => {
+  it('maintenance reports catalog unavailable instead of opening an owned blank tab', async () => {
     const request = { nonce: firstId, expiresAt: Date.now() + 120000 };
     const h = await worker([], request);
     await h.maintain();
-    await vi.waitFor(() => expect(h.create).toHaveBeenCalledTimes(1));
-    expect(h.tabs[0]!.pendingUrl).toBe(`https://chatgpt.com/?cos-model-catalog=${firstId}`);
-    let finish!: () => void;
-    h.sendMessage.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ ok: true, ready: true }); }));
-    await h.maintain();
-    await vi.waitFor(() => expect(h.sendMessage).toHaveBeenCalled());
-    await h.maintain();
-    expect(h.create).toHaveBeenCalledTimes(1);
-    expect(h.sendMessage).toHaveBeenCalledTimes(1);
-    finish();
+    await vi.waitFor(() => expect(h.fetch.mock.calls.some(([url]) => new URL(url).pathname === '/models')).toBe(true));
+    expect(h.create).not.toHaveBeenCalled();
+    expect(h.windows.create).not.toHaveBeenCalled();
+    const report = h.fetch.mock.calls.find(([url]) => new URL(url).pathname === '/models');
+    expect(JSON.parse(String(report?.[1]?.body))).toMatchObject({ nonce: firstId, models: null, error: 'picker_unavailable' });
   });
   it('reuses its own minimized window and never minimizes a user window', async () => {
     const h = await worker([]);

@@ -1809,15 +1809,72 @@ var CLF_DOM = (() => {
     });
   }
 
-  const CHAT_EFFORT_LABELS = { none: 'Instant', medium: 'Medium', high: 'High', xhigh: 'Extra High', pro: 'Pro' };
+  const CHAT_EFFORT_LABELS = {
+    none: ['Instant', '即時'],
+    medium: ['Medium', '標準'],
+    high: ['High', '高'],
+    xhigh: ['Extra High', '極高', '超高'],
+    pro: ['Pro']
+  };
+  const effortSlots = total => total === 5 ? ['none', 'medium', 'high', 'xhigh', 'pro']
+    : total === 4 ? ['none', 'medium', 'high', 'xhigh']
+      : total === 3 ? ['none', 'medium', 'high'] : null;
+  const effortFromLabel = value => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return Object.entries(CHAT_EFFORT_LABELS).find(([, labels]) => labels.some(label => label.toLowerCase() === normalized))?.[0] || null;
+  };
+  const effortFromOrdinal = (position, total) => effortSlots(total)?.[position - 1] || null;
+  const ordinalForEffort = (effort, total) => {
+    const index = effortSlots(total)?.indexOf(effort) ?? -1;
+    return index >= 0 ? index + 1 : null;
+  };
+  const effortLabelPattern = Object.values(CHAT_EFFORT_LABELS).flat().map(label => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const latestModelLabel = value => /^(?:Latest|最新)$/i.test(String(value || '').trim());
+  const modelToggle = root => root?.querySelector('[role="menuitem"][aria-label="Select model"], [role="menuitem"][aria-label="モデルを選択"]');
+  const powerItem = root => root?.querySelector('[role="menuitem"][aria-label="Power"], [role="menuitem"][aria-label="パワー"]');
   const normalizeModelLabel = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9.]/g, '');
-  /** One visible picker adapter for discovery and application; DOM ordinals are authoritative. */
+  /** One visible picker adapter for discovery and application; semantic DOM state is authoritative. */
   function modelPickerAccess(stillCurrent) {
     const shown = (node) => node && !node.closest('[aria-hidden="true"]') && node.getClientRects().length > 0;
-    const picker = () => document.querySelector('[data-testid="composer-intelligence-picker-content"]');
+    const composerForm = () => composerBox() || document;
+    const trigger = () => {
+      const root = composerForm();
+      const explicit = [...root.querySelectorAll('button[data-testid="model-switcher-dropdown-button"][aria-haspopup="menu"]')].filter(shown).at(-1);
+      if (explicit) return explicit;
+      const candidates = [...root.querySelectorAll('button[aria-haspopup="menu"]')]
+        .filter(shown)
+        .filter(node => node.getAttribute('data-testid') !== 'composer-plus-btn');
+      const structural = candidates.filter(node => node.getAttribute('data-tone') === 'neutral').at(-1);
+      if (structural) return structural;
+      // Compatibility fallback only. Identity never depends on this text once the picker is open.
+      return candidates.find(node => new RegExp(`^(?:${effortLabelPattern}|Thinking effort|思考量|推論)$`, 'i').test((node.textContent || '').trim())) || null;
+    };
+    const picker = () => {
+      const button = trigger();
+      const controls = button?.getAttribute('aria-controls');
+      if (controls) {
+        const owned = document.getElementById(controls);
+        if (shown(owned)) return owned;
+      }
+      const direct = document.querySelector('[data-testid="composer-intelligence-picker-content"]');
+      if (shown(direct)) return direct;
+      const candidates = [...document.querySelectorAll('[role="menu"], [role="group"]')].filter(shown);
+      return candidates.find(node => node.querySelector('[role="menuitemradio"], [data-model-reasoning-effort-slider], [role="slider"]')) || null;
+    };
     const items = () => [...(picker()?.querySelectorAll('[role="menuitemradio"]') || [])].filter(shown);
-    const trigger = () => [...(composerActions()?.host?.querySelectorAll('button[aria-haspopup="menu"]') || [])]
-      .filter(shown).find((node) => /(?:Instant|Medium|High|Pro|Thinking effort)/i.test(node.textContent || ''));
+    const structuralSlider = () => {
+      const roots = [picker(), document].filter(Boolean);
+      for (const root of roots) {
+        const containers = [...root.querySelectorAll('[data-model-reasoning-effort-slider]')].filter(shown);
+        const container = containers.at(-1);
+        const slider = container?.querySelector('[role="slider"]');
+        if (slider && shown(slider)) return { container, slider };
+      }
+      const root = picker();
+      const fallback = root && [...root.querySelectorAll('[role="slider"]')].filter(shown).at(-1);
+      return fallback ? { container: fallback.parentElement, slider: fallback } : { container: null, slider: null };
+    };
+    const power = () => structuralSlider().slider?.closest('[role="menuitem"]') || powerItem(picker());
     const wait = (read, timeoutMs = 3000) => new Promise((resolve) => {
       let observer, timer;
       const finish = (value) => { observer?.disconnect(); clearTimeout(timer); resolve(value); };
@@ -1826,42 +1883,74 @@ var CLF_DOM = (() => {
       observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
       timer = setTimeout(() => finish(null), timeoutMs); check();
     });
-    const power = () => picker()?.querySelector('[role="menuitem"][aria-label="Power"]');
     // Latest is a routing choice, not a model identity. At Pro the native badge
     // explicitly names the generation (observed: 6 Pro versus explicit 5.6 Pro).
     const latestProModel = () => {
-      const label = picker()?.querySelector('[role="menuitem"][aria-label="Select model"]')?.textContent?.trim();
+      const label = modelToggle(picker())?.textContent?.trim();
       const match = label?.match(/^(?:GPT[- ]?)?(\d+(?:\.\d+)?)\s*Pro$/i);
       return match ? `GPT-${match[1]} Pro` : null;
     };
     const current = () => {
-      if (power()?.getAttribute('aria-disabled') === 'true') return null;
-      const description = (power()?.getAttribute('aria-describedby') || '').split(/\s+/).map((id) => document.getElementById(id)?.textContent || '').join(' ');
-      const match = description.match(/(Instant|Medium|Extra High|High|Pro),\s*(\d+) of (\d+)/i);
-      if (!match) return null;
-      const position = Number(match[2]), total = Number(match[3]);
-      return total >= 1 && total <= 12 && position >= 1 && position <= total ? { label: match[1], position, total, available: !/Upgrade required/i.test(description) } : null;
+      const control = power();
+      if (!control || control.getAttribute('aria-disabled') === 'true') return null;
+      const { slider } = structuralSlider();
+      const description = (control.getAttribute('aria-describedby') || '').split(/\s+/).map((id) => document.getElementById(id)?.textContent || '').join(' ');
+      const labelSource = [description, slider?.getAttribute('aria-valuetext'), control.textContent].filter(Boolean).join(' ');
+      const visibleLabel = labelSource.match(new RegExp(`(${effortLabelPattern})`, 'i'))?.[1] || null;
+      let position = NaN, total = NaN;
+      if (slider) {
+        const now = Number(slider.getAttribute('aria-valuenow'));
+        const min = Number(slider.getAttribute('aria-valuemin'));
+        const max = Number(slider.getAttribute('aria-valuemax'));
+        if ([now, min, max].every(Number.isFinite) && max >= min && now >= min && now <= max) {
+          position = Math.round(now - min) + 1;
+          total = Math.round(max - min) + 1;
+        }
+      }
+      if (!Number.isFinite(position) || !Number.isFinite(total)) {
+        const englishOrdinal = description.match(/(\d+)\s+of\s+(\d+)/i);
+        const localizedOrdinal = description.match(/(\d+)\s*(?:\/|／|中の)\s*(\d+)/);
+        // Current Japanese accessibility copy is total-first: `高、5件中3件目`.
+        const japaneseOrdinal = description.match(/(\d+)\s*件中\s*(\d+)\s*件目/);
+        position = englishOrdinal ? Number(englishOrdinal[1]) : localizedOrdinal ? Number(localizedOrdinal[1]) : japaneseOrdinal ? Number(japaneseOrdinal[2]) : NaN;
+        total = englishOrdinal ? Number(englishOrdinal[2]) : localizedOrdinal ? Number(localizedOrdinal[2]) : japaneseOrdinal ? Number(japaneseOrdinal[1]) : NaN;
+      }
+      if (!Number.isFinite(position) || !Number.isFinite(total)) {
+        const pos = Number(control.getAttribute('aria-posinset'));
+        const size = Number(control.getAttribute('aria-setsize'));
+        if (Number.isFinite(pos) && Number.isFinite(size)) { position = pos; total = size; }
+      }
+      const effort = effortFromOrdinal(position, total) || effortFromLabel(visibleLabel);
+      if (!effort || !Number.isFinite(position) || !Number.isFinite(total)) return null;
+      const label = visibleLabel || CHAT_EFFORT_LABELS[effort][0];
+      return total >= 1 && total <= 5 && position >= 1 && position <= total
+        ? { effort, label, position, total, available: !/(?:Upgrade required|アップグレードが必要)/i.test(description) }
+        : null;
     };
     return {
       items, current, wait, latestProModel,
       async models() {
-        const toggle = picker()?.querySelector('[role="menuitem"][aria-label="Select model"]');
+        const toggle = modelToggle(picker());
         if (items().length && toggle?.getAttribute('aria-expanded') !== 'false') return items();
         if (!toggle || !stillCurrent()) return null;
         toggle.click(); return wait(() => toggle.getAttribute('aria-expanded') !== 'false' && items().length ? items() : null);
       },
       async open() {
-        // A newly created helper registers before React necessarily mounts the composer.
-        // Observe that same document becoming ready, instead of freezing a null trigger.
+        // Identify the native composer menu structurally. Localized effort copy is only a fallback.
         const button = await wait(trigger, 15000);
         if (!button || !stillCurrent()) return false;
-        if (!picker()) {
-          // Native menu triggers handle keyboard/pointer activation; HTMLElement.click()
-          // alone does not exercise their pointer-down opening contract.
-          button.focus();
-          button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+        if (picker()) return true;
+        button.focus();
+        button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+        if (await wait(picker, 1200)) return true;
+        if (!stillCurrent()) return false;
+        button.click();
+        if (await wait(picker, 1200)) return true;
+        if (!stillCurrent()) return false;
+        if (typeof PointerEvent === 'function') {
+          button.dispatchEvent(new PointerEvent('pointerdown', { button: 0, buttons: 1, pointerType: 'mouse', isPrimary: true, bubbles: true, cancelable: true }));
         }
-        return !!(await wait(picker));
+        return !!(await wait(picker, 1200));
       },
       close() { if (stillCurrent()) trigger()?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); },
       async choose(model) {
@@ -1870,7 +1959,6 @@ var CLF_DOM = (() => {
         if (!option || !stillCurrent() || option.getAttribute('aria-disabled') === 'true') return false;
         const alreadySelected = option.getAttribute('aria-checked') === 'true';
         // Selecting even the checked row returns from the model submenu to Power.
-        // Neither the Select model toggle nor radio rows must remain mounted there.
         const activate = node => {
           node.focus();
           node.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
@@ -1890,10 +1978,23 @@ var CLF_DOM = (() => {
         const expected = before.position + direction;
         if (expected < 1 || expected > before.total) return false;
         const key = direction < 0 ? 'ArrowLeft' : 'ArrowRight';
+        const { slider } = structuralSlider();
         const control = power();
-        const target = control.querySelector('[role="slider"]') || control;
+        const target = slider?.closest('[role="menuitem"]') || slider || control;
+        if (!target) return false;
         target.focus(); target.dispatchEvent(new KeyboardEvent('keydown', { key, code: key, bubbles: true, cancelable: true }));
         return !!(await wait(() => { const next = current(); return next?.position === expected && next.total === before.total && next; }));
+      },
+      async selectEffort(effort) {
+        const first = await wait(current); if (!first) return false;
+        const target = ordinalForEffort(effort, first.total);
+        if (!target) return false;
+        let power = first;
+        while (power.position !== target) {
+          if (!await this.step(target > power.position ? 1 : -1)) return false;
+          power = current(); if (!power) return false;
+        }
+        return power.effort === effort && power.available;
       }
     };
   }
@@ -1903,9 +2004,9 @@ var CLF_DOM = (() => {
     const ui = modelPickerAccess(() => true);
     const checked = ui.items().find(node => node.getAttribute('aria-checked') === 'true');
     let model = checked?.textContent?.trim();
-    if (model === 'Latest') model = ui.current()?.label.toLowerCase() === 'pro' ? ui.latestProModel() : null;
+    if (latestModelLabel(model)) model = ui.current()?.effort === 'pro' ? ui.latestProModel() : null;
     if (!model || !/^[a-zA-Z0-9 ._-]{1,80}$/.test(model)) return null;
-    const effort = Object.entries(CHAT_EFFORT_LABELS).find(([, label]) => label === ui.current()?.label)?.[0];
+    const effort = ui.current()?.effort;
     return { model, ...(effort ? { reasoningEffort: effort } : {}) };
   }
   async function inspectModelSettings(stillCurrent = () => true, failure = () => {}) {
@@ -1929,16 +2030,20 @@ var CLF_DOM = (() => {
         const efforts = [];
         for (let n = 1; n <= first.total; n++) {
           const power = ui.current(); if (!power || power.position !== n) throw new Error('power_changed');
-          const effort = Object.entries(CHAT_EFFORT_LABELS).find(([, name]) => name.toLowerCase() === power.label.toLowerCase())?.[0];
+          const effort = power.effort;
           if (power.available && effort && !efforts.includes(effort)) {
-            if (label === 'Latest') {
-              const actual = effort === 'pro' && ui.latestProModel();
+            // Pro is a model identity boundary, not another Sol/5.x reasoning level.
+            // Current ChatGPT may route the fifth Power position to GPT-6 Pro (Astra),
+            // while older/other rollouts may expose a different numeric Pro generation.
+            // Admit it only when the native picker itself names that effective model.
+            if (effort === 'pro') {
+              const actual = ui.latestProModel();
               if (actual) result.push({ id: actual.toLowerCase().replace(/\s+/g, '-'), label: actual, efforts: [effort] });
-            } else efforts.push(effort);
+            } else if (!latestModelLabel(label)) efforts.push(effort);
           }
           if (n < first.total && !await ui.step(1)) throw new Error('power_unconfirmed');
         }
-        if (label !== 'Latest') result.push({ id: label.toLowerCase().replace(/\s+/g, '-'), label, efforts });
+        if (!latestModelLabel(label)) result.push({ id: label.toLowerCase().replace(/\s+/g, '-'), label, efforts });
       }
     } catch (error) { failure(['model_unconfirmed', 'power_unknown', 'power_unconfirmed', 'power_changed'].includes(error?.message) ? error.message : 'inspection_failed'); result = null; }
     finally {
@@ -1946,7 +2051,7 @@ var CLF_DOM = (() => {
         for (let n = 0; n < 12; n++) {
           const power = ui.current();
           if (!power) break;
-          if (power.position === originalPower.position) { restored = power.label === originalPower.label && power.total === originalPower.total; break; }
+          if (power.position === originalPower.position) { restored = power.total === originalPower.total; break; }
           if (!await ui.step(power.position > originalPower.position ? -1 : 1)) break;
         }
       }
@@ -1971,25 +2076,42 @@ var CLF_DOM = (() => {
     if (!await ui.open()) return false;
     try {
       let latest = false;
+      let routedModel = model;
       if (model) {
         const options = await ui.models();
         const exact = options?.some(node => normalizeModelLabel(node.textContent) === normalizeModelLabel(model));
-        // A discovered numeric Pro identity may live under Latest. It is admitted
-        // only after its final power badge proves the requested generation again.
-        latest = !exact && /^gpt-?\d+(?:\.\d+)?-pro$/i.test(model) && effort === 'pro';
-        if (!await ui.choose(latest ? 'Latest' : model)) return false;
+        const pro = !exact && effort === 'pro' && /^gpt-?(\d+(?:\.\d+)?)-pro$/i.exec(model);
+        if (pro) {
+          // A discovered Pro identity can be routed by two different picker shapes:
+          // the newest generation usually lives under Latest, while an older generation
+          // can live at the Pro endpoint of its explicit Sol row. Prefer that exact base
+          // generation when the picker exposes it; otherwise use Latest and prove the
+          // effective generation from the native badge after the effort move.
+          const base = options?.find(node =>
+            normalizeModelLabel(node.textContent) === normalizeModelLabel(`GPT-${pro[1]} Sol`)
+          );
+          if (base) routedModel = base.textContent?.trim() || `GPT-${pro[1]} Sol`;
+          else {
+            latest = true;
+            routedModel = ui.items().find(node => latestModelLabel(node.textContent))?.textContent?.trim() || 'Latest';
+          }
+        }
+        if (!routedModel || !await ui.choose(routedModel)) return false;
       }
-      const confirmed = (power) => power.available && (!latest || normalizeModelLabel(ui.latestProModel()) === normalizeModelLabel(model));
+      const confirmed = (power) => {
+        if (!power.available) return false;
+        // Selecting the fifth Power position can cross a model boundary (for example
+        // GPT-5.6 Sol -> GPT-6 Pro/Astra). Never report `Sol + pro` merely because the
+        // slider reached its last ordinal. A model-scoped Pro request is valid only when
+        // the native picker names that same effective Pro model after selection.
+        if (effort === 'pro' && model) return normalizeModelLabel(ui.latestProModel()) === normalizeModelLabel(model);
+        return !latest || normalizeModelLabel(ui.latestProModel()) === normalizeModelLabel(model);
+      };
       if (!effort) return stillCurrent();
       const first = await ui.wait(ui.current); if (!first) return false;
-      if (first.label.toLowerCase() === CHAT_EFFORT_LABELS[effort].toLowerCase()) return confirmed(first);
-      for (let n = first.position; n > 1; n--) if (!await ui.step(-1)) return false;
-      for (let n = 1; n <= first.total; n++) {
-        const power = ui.current();
-        if (power?.label.toLowerCase() === CHAT_EFFORT_LABELS[effort].toLowerCase()) return confirmed(power);
-        if (n < first.total && !await ui.step(1)) return false;
-      }
-      return false;
+      if (!await ui.selectEffort(effort)) return false;
+      const selected = ui.current();
+      return !!selected && selected.effort === effort && confirmed(selected);
     } finally { ui.close(); }
   }
 

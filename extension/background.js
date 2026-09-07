@@ -1820,55 +1820,77 @@ function inspectRequestedModels(request) {
   if (modelCatalogFlight) return modelCatalogFlight;
   const wanted = request && /^[a-f0-9-]{36}$/i.test(request.nonce) && Number.isFinite(request.expiresAt) && Date.now() < request.expiresAt ? request : null;
   modelCatalogFlight = (async () => {
-    const observed = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
-    const tabs = wanted ? observed : observed.filter(tab => catalogTabNonce(tab));
-    if (!wanted && tabs.length < 2) return;
-    // Reuse a loaded idle document without navigation. A dedicated helper stays
-    // warm between requests; its URL marker identifies ownership, not the request.
-    tabs.sort((a, b) => Number(!!catalogTabNonce(b)) - Number(!!catalogTabNonce(a)) || a.id - b.id);
-    const proofs = await Promise.all(tabs.map(candidate => catalogProbe(candidate.id, catalogTabNonce(candidate))));
-    let tab = tabs.find((_candidate, index) => proofs[index]?.ready === true);
-    if (wanted && Date.now() >= wanted.expiresAt) return;
-    if (!wanted && !tab) return;
-    if (!tab) {
-      // An existing helper may be temporarily busy. Retain it and wait.
-      if (tabs.some(candidate => catalogTabNonce(candidate))) return;
-      tab = await createChatTab(`https://chatgpt.com/?cos-model-catalog=${wanted.nonce}`, true);
-      await chrome.tabs.update(tab.id, { autoDiscardable: false });
-      return;
-    }
-    // App startup can open a second marked helper before its bridge sees the
-    // surviving extension. One ready keeper owns discovery; retire only proven
-    // empty duplicates through the existing document-scoped close protocol.
-    const retireDuplicates = async () => {
-      if (!catalogTabNonce(tab)) return;
-      for (const duplicate of tabs) {
-        if (duplicate.id === tab.id || !catalogTabNonce(duplicate) || duplicate.pendingUrl) continue;
-        const source = { tab: duplicate.id, documentId: tabDocuments[String(duplicate.id)], navigationEpoch: tabEpochs[String(duplicate.id)] };
-        if (!ownsDocument(source)) continue;
-        try {
-          let timer;
-          const proof = await Promise.race([
-            chrome.tabs.sendMessage(duplicate.id, { type: 'clf-tab-close-check', conversationId: null }, { documentId: source.documentId }),
-            new Promise(resolve => { timer = setTimeout(() => resolve(null), 3000); })
-          ]).finally(() => clearTimeout(timer));
-          const [keeper, latest] = await Promise.all([chrome.tabs.get(tab.id), chrome.tabs.get(duplicate.id)]);
-          if (proof?.safe !== true || proof.conversationId !== null || proof.navigationEpoch !== source.navigationEpoch || !ownsDocument(source) ||
-            keeper.pendingUrl || keeper.url !== tab.url || latest.pendingUrl || latest.url !== duplicate.url) continue;
-          await chrome.tabs.remove(duplicate.id);
-        } catch { /* Busy, drafting or changed documents keep their tab. */ }
+    let observed = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
+    const retireCatalogTab = async (candidate) => {
+      if (!candidate?.id || !catalogTabNonce(candidate)) return false;
+      const key = String(candidate.id);
+      const source = { tab: candidate.id, documentId: tabDocuments[key], navigationEpoch: tabEpochs[key] };
+      if (!source.documentId || !ownsDocument(source)) return false;
+      try {
+        const before = await chrome.tabs.get(candidate.id);
+        if (!before || before.pendingUrl || !catalogTabNonce(before) || conversationFromUrl(before.url)) return false;
+        let timer;
+        const proof = await Promise.race([
+          chrome.tabs.sendMessage(candidate.id, { type: 'clf-tab-close-check', conversationId: null }, { documentId: source.documentId }),
+          new Promise(resolve => { timer = setTimeout(() => resolve(null), 3000); })
+        ]).finally(() => clearTimeout(timer));
+        const latest = await chrome.tabs.get(candidate.id);
+        if (proof?.safe !== true || proof.conversationId !== null || proof.navigationEpoch !== source.navigationEpoch || !ownsDocument(source) ||
+          latest.pendingUrl || !catalogTabNonce(latest) || conversationFromUrl(latest.url)) return false;
+        await chrome.tabs.remove(candidate.id);
+        return true;
+      } catch { return false; }
+    };
+    const retireLegacyHelpers = async (exceptId = null) => {
+      for (const candidate of observed) {
+        if (candidate.id === exceptId || !catalogTabNonce(candidate) || candidate.pendingUrl) continue;
+        await retireCatalogTab(candidate);
       }
     };
-    if (!wanted) { await retireDuplicates(); return; }
+    if (!wanted) { await retireLegacyHelpers(); return; }
+    if (Date.now() >= wanted.expiresAt) return;
+
+    // Discovery must never create or navigate a ChatGPT tab. An already-open tab is the
+    // execution surface; after an unpacked extension reload, repair its content scripts in
+    // place so model discovery does not depend on a stale isolated world.
+    for (const candidate of observed) {
+      if (!Number.isInteger(candidate?.id)) continue;
+      await restoreChatgptTab(candidate.id);
+      // A healthy recorder can survive an unpacked-extension reload while its CLF_DOM adapter
+      // remains the previous implementation. Refresh only that adapter in-place; content.js
+      // reads the global on demand, so this updates model-picker compatibility without creating,
+      // navigating or reloading the user's ChatGPT tab.
+      try { await chrome.scripting.executeScript({ target: { tabId: candidate.id }, files: ['chatgpt-dom.js'] }); }
+      catch { /* A tab that navigated during repair is simply not a discovery candidate. */ }
+    }
+    observed = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
+    if (Date.now() >= wanted.expiresAt) return;
+    const tabs = observed.filter(candidate => Number.isInteger(candidate?.id));
+    // Prefer a normal user tab over any legacy marked helper. Readiness below refuses active
+    // generations, drafts and attachments, so discovery never steals a tab that is being used.
+    tabs.sort((a, b) => Number(!!catalogTabNonce(a)) - Number(!!catalogTabNonce(b)) || a.id - b.id);
+    const proofs = await Promise.all(tabs.map(candidate => catalogProbe(candidate.id, catalogTabNonce(candidate))));
+    const tab = tabs.find((_candidate, index) => proofs[index]?.ready === true);
+    if (!tab) {
+      await retireLegacyHelpers();
+      await call('/models', { method: 'POST', body: JSON.stringify({ nonce: wanted.nonce, models: null, error: 'picker_unavailable' }) });
+      return;
+    }
+
     modelCatalogTarget = { tab: tab.id, nonce: wanted.nonce, url: tab.url || tab.pendingUrl };
     let timer;
     try {
-      const inspected = await Promise.race([
+      await Promise.race([
         chrome.tabs.sendMessage(tab.id, { type: 'clf-model-catalog', nonce: wanted.nonce, expiresAt: wanted.expiresAt }),
         new Promise(resolve => { timer = setTimeout(resolve, Math.min(35000, wanted.expiresAt - Date.now())); })
       ]);
-      if (inspected?.ok === true) await retireDuplicates();
-    } finally { clearTimeout(timer); }
+    } finally {
+      clearTimeout(timer);
+      // Only old, explicitly marked catalog helpers are disposable. Normal ChatGPT tabs are
+      // never closed by discovery, even when they were the tab used for inspection.
+      await retireLegacyHelpers();
+      await retireCatalogTab(tab);
+    }
   })().catch(() => undefined).finally(() => { modelCatalogTarget = null; modelCatalogFlight = null; });
   return modelCatalogFlight;
 }

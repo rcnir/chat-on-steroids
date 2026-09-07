@@ -244,7 +244,95 @@ describe('actual visible model and reasoning selection', () => {
     });
     expect(await api.selectModelSettings('gpt-example', 'high')).toBe(true);
     expect(selected).toHaveBeenCalledTimes(2);
-    expect(keys).toEqual(['ArrowLeft', 'ArrowRight', 'ArrowRight']);
+    expect(keys).toEqual(['ArrowRight']);
+  });
+
+  it('accepts the Japanese ChatGPT picker and maps 極高 to xhigh', async () => {
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+    trigger.textContent = '極高';
+    const controls = picker();
+    controls.radio.setAttribute('aria-checked', 'true');
+    controls.container.querySelector('[aria-label="Select model"]')!.setAttribute('aria-label', 'モデルを選択');
+    controls.power.setAttribute('aria-label', 'パワー');
+    controls.description.textContent = '極高、4/5';
+    expect(await api.selectModelSettings('gpt-example', 'xhigh')).toBe(true);
+    document.body.append(controls.container);
+    expect(api.visibleModelSelection()).toEqual({ model: 'GPT Example', reasoningEffort: 'xhigh' });
+  });
+
+  it.each([
+    ['即時', 'none'],
+    ['標準', 'medium'],
+    ['高', 'high']
+  ])('opens the Japanese picker from %s and maps it to %s', async (label, effort) => {
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+    trigger.textContent = label;
+    const controls = picker();
+    controls.radio.setAttribute('aria-checked', 'true');
+    controls.container.querySelector('[aria-label="Select model"]')!.setAttribute('aria-label', 'モデルを選択');
+    controls.power.setAttribute('aria-label', 'パワー');
+    controls.description.textContent = `${label}、${effort === 'none' ? 1 : effort === 'medium' ? 2 : 3}/4`;
+    expect(await api.selectModelSettings('gpt-example', effort)).toBe(true);
+    document.body.append(controls.container);
+    expect(api.visibleModelSelection()).toEqual({ model: 'GPT Example', reasoningEffort: effort });
+  });
+
+
+  it('finds the Japanese model pill anywhere inside the composer form, not only trailing actions', async () => {
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+    trigger.textContent = '高';
+    const trailing = document.querySelector('[data-testid="composer-trailing-actions"]')!;
+    const form = document.querySelector('form')!;
+    form.insertBefore(trigger, trailing);
+    const controls = picker();
+    controls.radio.setAttribute('aria-checked', 'true');
+    controls.container.querySelector('[aria-label="Select model"]')!.setAttribute('aria-label', 'モデルを選択');
+    controls.power.setAttribute('aria-label', 'パワー');
+    controls.description.textContent = '高、5件中3件目。左右の矢印キーでパワーを調整します。';
+    expect(await api.selectModelSettings('gpt-example', 'high')).toBe(true);
+  });
+
+  it('reads total-first Japanese power ordinals such as 5件中3件目', async () => {
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+    trigger.textContent = '高';
+    const controls = picker();
+    controls.radio.setAttribute('aria-checked', 'true');
+    controls.container.querySelector('[aria-label="Select model"]')!.setAttribute('aria-label', 'モデルを選択');
+    controls.power.setAttribute('aria-label', 'パワー');
+    controls.description.textContent = '高、5件中3件目。左右の矢印キーでパワーを調整します。';
+    expect(await api.selectModelSettings('gpt-example', 'high')).toBe(true);
+    document.body.append(controls.container);
+    expect(api.visibleModelSelection()).toEqual({ model: 'GPT Example', reasoningEffort: 'high' });
+  });
+
+  it('uses the native slider ordinal when localized accessibility text has no English ordinal', async () => {
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+    trigger.textContent = '極高';
+    const controls = picker();
+    controls.radio.setAttribute('aria-checked', 'true');
+    controls.container.querySelector('[aria-label="Select model"]')!.setAttribute('aria-label', 'モデルを選択');
+    controls.power.setAttribute('aria-label', 'パワー');
+    controls.description.textContent = '現在の思考量';
+    const slider = document.createElement('span');
+    slider.setAttribute('role', 'slider');
+    slider.setAttribute('aria-valuemin', '0');
+    slider.setAttribute('aria-valuemax', '4');
+    slider.setAttribute('aria-valuenow', '3');
+    controls.power.append(slider);
+    expect(await api.selectModelSettings('gpt-example', 'xhigh')).toBe(true);
+    document.body.append(controls.container);
+    expect(api.visibleModelSelection()).toEqual({ model: 'GPT Example', reasoningEffort: 'xhigh' });
+  });
+
+  it('refuses a Japanese upgrade-only reasoning slot', async () => {
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+    trigger.textContent = '極高';
+    const controls = picker();
+    controls.radio.setAttribute('aria-checked', 'true');
+    controls.container.querySelector('[aria-label="Select model"]')!.setAttribute('aria-label', 'モデルを選択');
+    controls.power.setAttribute('aria-label', 'パワー');
+    controls.description.textContent = '極高、4/5。アップグレードが必要です。';
+    expect(await api.selectModelSettings('gpt-example', 'xhigh')).toBe(false);
   });
 
   it.each([false, true])('keeps already-selected High and refuses it when unavailable (%s)', async (unavailable) => {
@@ -256,19 +344,47 @@ describe('actual visible model and reasoning selection', () => {
     expect(changedPower).not.toHaveBeenCalled();
   });
 
-  it('targets the nested Power slider rather than the surrounding menu item', async () => {
+  it('drives the semantic effort slider through its owning menu item', async () => {
     const controls = picker();
     const slider = document.createElement('span');
     slider.setAttribute('role', 'slider'); slider.tabIndex = 0;
-    controls.power.append(slider);
-    let position = 2;
-    slider.addEventListener('keydown', event => {
-      event.stopPropagation();
-      position += (event as KeyboardEvent).key === 'ArrowRight' ? 1 : -1;
-      controls.description.textContent = `${['Instant', 'Medium', 'High', 'Extra High', 'Pro'][position - 1]}, ${position} of 5`;
+    slider.setAttribute('aria-valuemin', '0');
+    slider.setAttribute('aria-valuemax', '4');
+    slider.setAttribute('aria-valuenow', '1');
+    const shell = document.createElement('span');
+    shell.setAttribute('data-model-reasoning-effort-slider', '');
+    shell.append(slider);
+    controls.power.append(shell);
+    controls.power.addEventListener('keydown', event => {
+      const delta = (event as KeyboardEvent).key === 'ArrowRight' ? 1 : -1;
+      slider.setAttribute('aria-valuenow', String(Number(slider.getAttribute('aria-valuenow')) + delta));
     });
     expect(await api.selectModelSettings(null, 'high')).toBe(true);
-    expect(position).toBe(3);
+    expect(slider.getAttribute('aria-valuenow')).toBe('2');
+  });
+
+  it('selects xhigh from structural ARIA state even when every effort label is unknown', async () => {
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+    trigger.textContent = '完全に未知の表示';
+    trigger.setAttribute('data-tone', 'neutral');
+    const controls = picker();
+    controls.radio.setAttribute('aria-checked', 'true');
+    controls.description.textContent = '未知の思考量表示';
+    const slider = document.createElement('span');
+    slider.setAttribute('role', 'slider');
+    slider.setAttribute('aria-valuemin', '0');
+    slider.setAttribute('aria-valuemax', '4');
+    slider.setAttribute('aria-valuenow', '2');
+    const shell = document.createElement('span');
+    shell.setAttribute('data-model-reasoning-effort-slider', '');
+    shell.append(slider);
+    controls.power.append(shell);
+    controls.power.addEventListener('keydown', event => {
+      const delta = (event as KeyboardEvent).key === 'ArrowRight' ? 1 : -1;
+      slider.setAttribute('aria-valuenow', String(Number(slider.getAttribute('aria-valuenow')) + delta));
+    });
+    expect(await api.selectModelSettings('gpt-example', 'xhigh')).toBe(true);
+    expect(slider.getAttribute('aria-valuenow')).toBe('3');
   });
 
   it('fails when a model click never becomes checked and refuses unsupported effort', async () => {
@@ -433,13 +549,15 @@ describe('read-only picker catalog', () => {
     const controls = latestPicker();
     expect(await api.inspectModelSettings()).toEqual([
       { id: 'gpt-6-pro', label: 'GPT-6 Pro', efforts: ['pro'] },
-      { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', efforts: ['none', 'medium', 'high', 'xhigh', 'pro'] }
+      { id: 'gpt-5.6-pro', label: 'GPT-5.6 Pro', efforts: ['pro'] },
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', efforts: ['none', 'medium', 'high', 'xhigh'] }
     ]);
     expect(controls.radios[0]!.getAttribute('aria-checked')).toBe('true');
     expect(controls.description.textContent).toBe('Medium, 2 of 5');
     expect(await api.selectModelSettings('gpt-6-pro', 'pro')).toBe(true);
     expect(api.visibleModelSelection()).toEqual({ model: 'GPT-6 Pro', reasoningEffort: 'pro' });
-    expect(await api.selectModelSettings('gpt-5.6-sol', 'pro')).toBe(true);
+    expect(await api.selectModelSettings('gpt-5.6-sol', 'pro')).toBe(false);
+    expect(await api.selectModelSettings('gpt-5.6-pro', 'pro')).toBe(true);
     expect(controls.radios[1]!.getAttribute('aria-checked')).toBe('true');
     expect(controls.container.querySelector('[aria-label="Select model"]')!.textContent).toBe('5.6Pro');
   });
@@ -447,10 +565,10 @@ describe('read-only picker catalog', () => {
     latestPicker('5.6');
     expect(await api.selectModelSettings('gpt-6-pro', 'pro')).toBe(false);
   });
-  it('does not invent Latest identity from an effort-only badge', async () => {
+  it('does not invent Latest identity from an effort-only badge while retaining explicit Sol Pro identity', async () => {
     latestPicker('');
     const models = await api.inspectModelSettings();
-    expect(models?.map(model => model.id)).toEqual(['gpt-5.6-sol']);
+    expect(models?.map(model => model.id)).toEqual(['gpt-5.6-pro', 'gpt-5.6-sol']);
   });
   it('opens the native menu with Enter rather than relying on a click-only fixture', async () => {
     const controls = catalogPicker(['Instant', 'Medium', 'High']);
@@ -537,12 +655,25 @@ describe('read-only picker catalog', () => {
     const controls = catalogPicker(labels, true);
     const result = await api.inspectModelSettings();
     expect(result).toEqual([
-      { id: 'gpt-example', label: 'GPT Example', efforts: ['none', 'medium', 'high', 'xhigh', ...(labels.includes('Pro') ? ['pro'] : [])] },
-      { id: 'sol-example', label: 'Sol Example', efforts: ['none', 'medium', 'high', 'xhigh', ...(labels.includes('Pro') ? ['pro'] : [])] }
+      { id: 'gpt-example', label: 'GPT Example', efforts: ['none', 'medium', 'high', 'xhigh'] },
+      { id: 'sol-example', label: 'Sol Example', efforts: ['none', 'medium', 'high', 'xhigh'] }
     ]);
     expect(controls.radio.getAttribute('aria-checked')).toBe('true');
     expect(controls.description.textContent).toBe(`Medium, 2 of ${labels.length}`);
     expect(box.textContent).toBe('Exact app prompt');
+  });
+
+  it('discovers localized effort names from their native ordinal positions', async () => {
+    const controls = catalogPicker(['即時', '標準', '高', '極高'], true);
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+    trigger.textContent = '極高';
+    controls.container.querySelector('[aria-label="Select model"]')!.setAttribute('aria-label', 'モデルを選択');
+    controls.power.setAttribute('aria-label', 'パワー');
+    const result = await api.inspectModelSettings();
+    expect(result).toEqual([
+      { id: 'gpt-example', label: 'GPT Example', efforts: ['none', 'medium', 'high', 'xhigh'] },
+      { id: 'sol-example', label: 'Sol Example', efforts: ['none', 'medium', 'high', 'xhigh'] }
+    ]);
   });
   it('returns unknown when restoring the original model is no longer possible', async () => {
     const controls = catalogPicker(['Instant', 'Medium', 'High', 'Extra High']);
