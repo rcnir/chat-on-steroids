@@ -129,6 +129,13 @@ describe('extension release metadata', () => {
     expect(backgroundSource).toContain('async overwriteNow()');
     expect(backgroundSource).toContain("chrome.tabs.sendMessage(id, { type: 'clf-overwrite-now' })");
   });
+
+  it('exposes the narrow worker-lifecycle API only to the Project Organizer extension', async () => {
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(process.cwd(), 'extension', 'manifest.json'), 'utf8')
+    ) as { externally_connectable?: { ids?: string[] } };
+    expect(manifest.externally_connectable).toEqual({ ids: ['jmnebgcpbcpiaphhegkhhiilbpggflpj'] });
+  });
 });
 
 // ---------------------------------------------------------------------- DOM
@@ -450,6 +457,8 @@ class FakeStorageArea {
 
 interface WorkerHarness {
   send(message: Record<string, unknown>, tabId?: number, documentId?: string): Promise<any>;
+  /** Sends a message from another extension through Chrome's external-message boundary. */
+  sendExternal(message: Record<string, unknown>, senderId?: string): Promise<any>;
   /** Fires Chrome's real tab-close lifecycle event. */
   closeTab(tabId: number): Promise<void>;
   /** Fires only Chrome's navigation-start signal, without inventing a replacement document. */
@@ -503,6 +512,7 @@ function loadWorker(options: {
   windowsGet?: (windowId: number) => Promise<{ focused?: boolean }>;
 }): WorkerHarness {
   let listener: ((message: any, sender: any, sendResponse: (value: any) => void) => boolean) | null = null;
+  let externalListener: ((message: any, sender: any, sendResponse: (value: any) => void) => boolean) | null = null;
   const tabRemovedListeners: Array<(tabId: number) => void> = [];
   const tabCreatedListeners: Array<(tab: { id?: number; url?: string; pendingUrl?: string }) => void> = [];
   const tabUpdatedListeners: Array<(tabId: number, changeInfo: { url?: string; status?: string }) => void> = [];
@@ -548,6 +558,11 @@ function loadWorker(options: {
       onMessage: {
         addListener(fn: typeof listener) {
           listener = fn;
+        }
+      },
+      onMessageExternal: {
+        addListener(fn: typeof externalListener) {
+          externalListener = fn;
         }
       },
       onInstalled: {
@@ -698,6 +713,18 @@ function loadWorker(options: {
           }
         });
       }
+    },
+    sendExternal(message, senderId = 'jmnebgcpbcpiaphhegkhhiilbpggflpj') {
+      return new Promise((resolve, reject) => {
+        if (!externalListener) return reject(new Error('background.js did not register an external message listener'));
+        try {
+          const keep = externalListener(message, { id: senderId }, resolve);
+          if (keep !== true && keep !== false) reject(new Error('external listener returned an invalid channel result'));
+          if (keep === false) setTimeout(() => resolve(undefined), 0);
+        } catch (err) {
+          reject(err);
+        }
+      });
     },
     send(message, tabId = 1, documentId = documentFor(tabId)) {
       if (message.type === 'bind' && typeof message.conversationId === 'string') {
@@ -1037,6 +1064,60 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
     // open the chat the app is owed.
     await worker.closeTab(61);
     expect(worker.alarmClear).not.toHaveBeenCalledWith('clf-bridge-drain');
+  });
+});
+
+describe('Project Organizer lifecycle bridge', () => {
+  const paired = { port: 8765, token: 'paired-token' };
+  const CHAT = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+
+  it('returns only a narrow non-retired worker projection to the authorized Organizer', async () => {
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      if (url.pathname === '/activity') return response(200, {
+        sessionId: 'secret-session-id', bootstrap: 'worker', bootstrapAgent: 'worker-7',
+        entries: [{ tool: 'exec_command', summary: 'must not escape' }], stream: [{ text: 'private activity' }]
+      });
+      return response(404, {});
+    });
+    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
+    const result = await worker.sendExternal({ type: 'cos-organizer-worker-state', conversationId: CHAT });
+    expect(result).toEqual({ ok: true, conversationId: CHAT, worker: true, workerId: 'worker-7', retired: false, retirement: null });
+    expect(JSON.stringify(result)).not.toMatch(/secret-session|exec_command|private activity/);
+    expect(fetch.mock.calls.some(([input]) => new URL(String(input)).pathname === '/activity')).toBe(true);
+  });
+
+  it('projects exact retired-worker authority without exposing activity contents', async () => {
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      if (url.pathname === '/activity') return response(200, {
+        sessionId: 'secret-session-id', entries: [{ raw: 'nope' }],
+        retiredWorker: { id: 'worker-3', reason: 'its parked worker history was dropped', retiredAt: 1788800000000 }
+      });
+      return response(404, {});
+    });
+    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
+    const result = await worker.sendExternal({ type: 'cos-organizer-worker-state', conversationId: CHAT });
+    expect(result).toEqual({
+      ok: true, conversationId: CHAT, worker: true, workerId: 'worker-3', retired: true,
+      retirement: { reason: 'its parked worker history was dropped', retiredAt: 1788800000000 }
+    });
+    expect(JSON.stringify(result)).not.toMatch(/secret-session|"raw"/);
+  });
+
+  it('refuses every other extension before any bridge activity request', async () => {
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      if (url.pathname === '/activity') throw new Error('must not be called');
+      return response(404, {});
+    });
+    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
+    const result = await worker.sendExternal({ type: 'cos-organizer-worker-state', conversationId: CHAT }, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(result).toEqual({ ok: false, error: 'forbidden_sender' });
+    expect(fetch.mock.calls.some(([input]) => new URL(String(input)).pathname === '/activity')).toBe(false);
   });
 });
 
