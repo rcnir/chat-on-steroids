@@ -130,11 +130,15 @@ describe('extension release metadata', () => {
     expect(backgroundSource).toContain("chrome.tabs.sendMessage(id, { type: 'clf-overwrite-now' })");
   });
 
-  it('exposes the narrow worker-lifecycle API only to the Project Organizer extension', async () => {
+  it('does not expose an external-extension control surface', async () => {
     const manifest = JSON.parse(
       await fs.readFile(path.join(process.cwd(), 'extension', 'manifest.json'), 'utf8')
-    ) as { externally_connectable?: { ids?: string[] } };
-    expect(manifest.externally_connectable).toEqual({ ids: ['jmnebgcpbcpiaphhegkhhiilbpggflpj'] });
+    ) as { externally_connectable?: unknown };
+    expect(manifest.externally_connectable).toBeUndefined();
+    expect(backgroundSource).not.toContain('onMessageExternal');
+    expect(backgroundSource).not.toContain('organizerWorkerState');
+    expect(backgroundSource).not.toContain('cleanupReady');
+    expect(backgroundSource).not.toContain('tabClosable');
   });
 });
 
@@ -1064,71 +1068,6 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
     // open the chat the app is owed.
     await worker.closeTab(61);
     expect(worker.alarmClear).not.toHaveBeenCalledWith('clf-bridge-drain');
-  });
-});
-
-describe('Project Organizer lifecycle bridge', () => {
-  const paired = { port: 8765, token: 'paired-token' };
-  const CHAT = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
-
-  it('returns only a narrow app-owned tab-close projection to the authorized Organizer', async () => {
-    const fetch = vi.fn(async (input: string) => {
-      const url = new URL(input);
-      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
-      if (url.pathname === '/status') return response(200, {
-        ok: true, repairs: [], closableConversations: [CHAT], managedConversations: [CHAT]
-      });
-      if (url.pathname === '/activity') return response(200, {
-        sessionId: 'secret-session-id', bootstrap: 'worker', bootstrapAgent: 'worker-7',
-        entries: [{ tool: 'exec_command', summary: 'must not escape' }], stream: [{ text: 'private activity' }]
-      });
-      return response(404, {});
-    });
-    const worker = loadWorker({
-      local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch,
-      tabsQuery: async () => [{ id: 1, windowId: 7, url: `https://chatgpt.com/c/${CHAT}` }]
-    });
-    const result = await worker.sendExternal({ type: 'cos-organizer-worker-state', conversationId: CHAT });
-    expect(result).toEqual({
-      ok: true, conversationId: CHAT, worker: true, workerId: 'worker-7',
-      tabClosable: true, retired: false, cleanupReady: false, retirement: null
-    });
-    expect(JSON.stringify(result)).not.toMatch(/secret-session|exec_command|private activity/);
-    expect(fetch.mock.calls.some(([input]) => new URL(String(input)).pathname === '/activity')).toBe(true);
-  });
-
-  it('projects retired identity but keeps ChatGPT-history cleanup disabled without dedicated app proof', async () => {
-    const fetch = vi.fn(async (input: string) => {
-      const url = new URL(input);
-      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
-      if (url.pathname === '/status') return response(200, { ok: true, repairs: [], closableConversations: [] });
-      if (url.pathname === '/activity') return response(200, {
-        sessionId: 'secret-session-id', entries: [{ raw: 'nope' }],
-        retiredWorker: { id: 'worker-3', reason: 'its parked worker history was dropped', retiredAt: 1788800000000 }
-      });
-      return response(404, {});
-    });
-    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
-    const result = await worker.sendExternal({ type: 'cos-organizer-worker-state', conversationId: CHAT });
-    expect(result).toEqual({
-      ok: true, conversationId: CHAT, worker: true, workerId: 'worker-3',
-      tabClosable: false, retired: true, cleanupReady: false,
-      retirement: { reason: 'its parked worker history was dropped', retiredAt: 1788800000000 }
-    });
-    expect(JSON.stringify(result)).not.toMatch(/secret-session|"raw"/);
-  });
-
-  it('refuses every other extension before any bridge activity request', async () => {
-    const fetch = vi.fn(async (input: string) => {
-      const url = new URL(input);
-      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
-      if (url.pathname === '/activity') throw new Error('must not be called');
-      return response(404, {});
-    });
-    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
-    const result = await worker.sendExternal({ type: 'cos-organizer-worker-state', conversationId: CHAT }, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
-    expect(result).toEqual({ ok: false, error: 'forbidden_sender' });
-    expect(fetch).not.toHaveBeenCalled();
   });
 });
 

@@ -41,8 +41,6 @@ const MODEL_REQUEST_TIMEOUT_MS = 190_000;
 const TIMED_OUT = 'the app took too long to answer';
 /** Bumped only when the request/response shape changes; the app compares it. */
 const BRIDGE_PROTOCOL = 12;
-/** The only separate extension allowed to ask for a narrow worker-lifecycle projection. */
-const ORGANIZER_EXTENSION_ID = 'jmnebgcpbcpiaphhegkhhiilbpggflpj';
 
 /**
  * Journal caps. The byte figure is what actually matters — chrome.storage.session has a
@@ -1599,55 +1597,6 @@ function cleanConversationId(value) {
 }
 
 /**
- * Read-only lifecycle view for the separate Project Organizer.
- *
- * The Organizer never receives this extension's bridge token, port, activity stream or tool
- * records. It gets only enough app-owned identity/lifecycle state to make a fail-closed cleanup
- * decision for the exact conversation already open in its own content script.
- */
-async function organizerWorkerState(value) {
-  const conversationId = cleanConversationId(value);
-  if (!conversationId) return { ok: false, error: 'bad_conversation_id' };
-
-  // Let the companion perform its ordinary maintenance pass, which safely consumes repairs,
-  // revivals and tab policy in one place. The Organizer never calls /status itself.
-  await load();
-  try { await maintain(); } catch { /* A stale/unavailable policy fails closed below. */ }
-
-  const result = await call(`/activity?conversationId=${encodeURIComponent(conversationId)}&since=0`);
-  if (!result.ok || !result.data || typeof result.data !== 'object') {
-    return { ok: false, error: result.error || result.data?.error || 'worker_state_unavailable' };
-  }
-  const retired = result.data.retiredWorker && typeof result.data.retiredWorker === 'object'
-    ? result.data.retiredWorker
-    : null;
-  const worker = result.data.bootstrap === 'worker' || retired !== null;
-  const bootstrapAgent = typeof result.data.bootstrapAgent === 'string' && result.data.bootstrapAgent
-    ? result.data.bootstrapAgent
-    : null;
-  const workerId = retired && typeof retired.id === 'string' && retired.id ? retired.id : bootstrapAgent;
-  const policyFresh = organizerPolicyObservedAt > 0 && Date.now() - organizerPolicyObservedAt <= 60_000;
-  return {
-    ok: true,
-    conversationId,
-    worker,
-    workerId,
-    // Exact app-owned answer that this tab is now disposable. The app currently places stopped
-    // worker chats here after its own quiescence/idle policy; active and waking work never qualifies.
-    tabClosable: policyFresh && organizerClosableConversations.has(conversationId),
-    retired: retired !== null,
-    // Deletion stays fail-closed until the app has a dedicated report-ACK cleanup projection.
-    cleanupReady: false,
-    retirement: retired
-      ? {
-          reason: typeof retired.reason === 'string' ? retired.reason.slice(0, 500) : '',
-          retiredAt: Number.isFinite(Number(retired.retiredAt)) ? Number(retired.retiredAt) : null
-        }
-      : null
-  };
-}
-
-/**
  * The mode a goal was written under, as a body fragment or nothing at all.
  *
  * Two words are legal and everything else is silently absent rather than passed on, because
@@ -2031,10 +1980,6 @@ function inspectRequestedModels(request) {
 
 let maintenanceFlight = null;
 let maintenanceAgain = false;
-// Most recent app-owned tab-close policy. External Organizer reads only this narrow,
-// already-processed projection; it never consumes /status work itself.
-let organizerClosableConversations = new Set();
-let organizerPolicyObservedAt = 0;
 let wakeSocket = null;
 function closeWakeSocket() {
   const previous = wakeSocket; wakeSocket = null;
@@ -2192,8 +2137,6 @@ async function maintainOnce() {
       .map(cleanConversationId)
       .filter((conversationId) => conversationId && !nonDiscardable.has(conversationId))
   );
-  organizerClosableConversations = new Set(closable);
-  organizerPolicyObservedAt = Date.now();
   const managedWork = Array.isArray(reply.data.managedConversations) && reply.data.managedConversations.length > 0;
   if (!protectionWork && !managedWork && closable.size === 0 && repairs.length === 0) return clearRetryIfIdle();
   let tabs = [];
@@ -3073,28 +3016,6 @@ const HANDLERS = {
     return result;
   }
 };
-
-if (chrome.runtime.onMessageExternal && typeof chrome.runtime.onMessageExternal.addListener === 'function') {
-  chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-    if (sender?.id !== ORGANIZER_EXTENSION_ID) {
-      sendResponse({ ok: false, error: 'forbidden_sender' });
-      return false;
-    }
-    if (!message || message.type !== 'cos-organizer-worker-state') {
-      sendResponse({ ok: false, error: 'unknown_message' });
-      return false;
-    }
-    const conversationId = cleanConversationId(message.conversationId);
-    if (!conversationId) {
-      sendResponse({ ok: false, error: 'bad_conversation_id' });
-      return false;
-    }
-    organizerWorkerState(conversationId).then(sendResponse, (err) =>
-      sendResponse({ ok: false, error: String(err && err.message ? err.message : err) })
-    );
-    return true;
-  });
-}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handler = message && typeof message.type === 'string' ? HANDLERS[message.type] : null;
