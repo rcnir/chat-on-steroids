@@ -83,6 +83,7 @@ it('opens an enrolled exact App Id directly in marked settings without name disc
   const create = vi.fn();
   const context = vm.createContext({ URL, setTimeout, clearTimeout, CHATGPT_TAB_URLS: ['https://chatgpt.com/*'],
     call: async () => ({ ok: true, data: { requests: [{ id, appId: 'asdk_app_synthetic', surface: 'core' }] } }), createChatTab: create,
+    dismissedPluginRefreshes: [], pluginRefreshTabs: {}, pluginRefreshBatchIds: [], pluginRefreshInternalCloses: new Set(), persistLive: async () => undefined,
     chrome: { tabs: { query: async () => [] } }
   });
   vm.runInContext(`${code}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);
@@ -105,6 +106,7 @@ it('reuses one owned management tab and preserves unreachable helpers and user c
   const sendMessage = vi.fn(async (): Promise<object> => ({ ok: true }));
   const context = vm.createContext({ URL, setTimeout, clearTimeout, CHATGPT_TAB_URLS: ['https://chatgpt.com/*'],
     call: async () => ({ ok: true, data: { requests } }), createChatTab: create,
+    dismissedPluginRefreshes: [], pluginRefreshTabs: {}, pluginRefreshBatchIds: [], pluginRefreshInternalCloses: new Set(), persistLive: async () => undefined,
     chrome: { tabs: { query: async () => tabs, get: async (id: number) => tabs.find(tab => tab.id === id), remove, sendMessage } }
   });
   vm.runInContext(`${code}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);

@@ -1822,6 +1822,106 @@ describe('extension revival delivery', () => {
     expect(local.data.deferredRevivals).toMatchObject([revival]);
     expect((local.data.deferredRevivals as Array<{ id: string }>).some((entry) => entry.id === oldId)).toBe(false);
   });
+
+  it('drops an expired deferred wake before it can recreate a closed worker tab', async () => {
+    const local = new FakeStorageArea({
+      ...paired,
+      deferredRevivals: [{ id: revival.id, conversationId: CHAT, queuedAt: Date.now() - 90_001 }]
+    });
+    const noPendingRevival = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      if (url.pathname === '/status') return response(200, { ok: true, recoveryMonitoring: false, repairs: [], revival: null });
+      return response(404, {});
+    });
+    const worker = loadWorker({
+      local,
+      session: new FakeStorageArea(),
+      fetch: noPendingRevival,
+      tabsQuery: async () => []
+    });
+
+    await worker.fireAlarm();
+
+    expect(worker.tabsCreate).not.toHaveBeenCalled();
+    expect(local.data.deferredRevivals ?? []).toEqual([]);
+  });
+});
+
+describe('plugin refresh helper lifecycle', () => {
+  const paired = { port: 8765, token: 'paired-token' };
+  const first = { id: '11111111-2222-4333-8444-555555555555', connectorName: 'Core', tools: [] };
+  const second = { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', connectorName: 'Desktop', tools: [] };
+  const fetch = vi.fn(async (input: string) => {
+    const url = new URL(input);
+    if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+    if (url.pathname === '/status') return response(200, {
+      ok: true,
+      recoveryMonitoring: true,
+      repairs: [],
+      pluginRefreshRequests: [{ surface: 'core', schemaId: 'core', connectorName: 'Core' }]
+    });
+    if (url.pathname === '/plugin-refresh') return response(200, { ok: true, requests: [first, second] });
+    return response(404, {});
+  });
+
+  it('treats closing an app-owned refresh helper as dismissal of the current refresh batch', async () => {
+    const local = new FakeStorageArea(paired);
+    const session = new FakeStorageArea();
+    const worker = loadWorker({ local, session, fetch });
+
+    await worker.fireAlarm();
+    expect(worker.tabsCreate).toHaveBeenCalledTimes(1);
+    expect(String(worker.tabsCreate.mock.calls[0]?.[0]?.url || '')).toContain(first.id);
+
+    await worker.closeTab(99);
+    await worker.fireAlarm();
+    expect(worker.tabsCreate).toHaveBeenCalledTimes(1);
+    expect(local.data.dismissedPluginRefreshes).toEqual(expect.arrayContaining([first.id, second.id]));
+
+    const restarted = loadWorker({ local, session: new FakeStorageArea(), fetch });
+    await restarted.fireAlarm();
+    expect(restarted.tabsCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('model catalog helper lifecycle', () => {
+  const paired = { port: 8765, token: 'paired-token' };
+  const nonce = '11111111-2222-4333-8444-555555555555';
+
+  it('retires an owned blank helper even after ChatGPT drops its catalog query marker', async () => {
+    let helperUrl = `https://chatgpt.com/?cos-model-catalog=${nonce}`;
+    const helper = () => ({ id: 4, windowId: 7, url: helperUrl, status: 'complete' });
+    const worker = loadWorker({
+      local: new FakeStorageArea(paired),
+      session: new FakeStorageArea(),
+      fetch: async input => {
+        const url = new URL(input);
+        if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+        if (url.pathname === '/status') return response(200, {
+          ok: true,
+          recoveryMonitoring: false,
+          repairs: [],
+          modelCatalogRequest: { nonce, expiresAt: Date.now() + 60_000 }
+        });
+        if (url.pathname === '/models') return response(200, { ok: true });
+        return response(404, {});
+      },
+      tabsQuery: async () => [helper()],
+      tabsGet: async () => helper(),
+      tabsSendMessage: async (_tabId, message) => {
+        if (message.type === 'clf-model-catalog-state') return { ready: true };
+        if (message.type === 'clf-model-catalog') { helperUrl = 'https://chatgpt.com/'; return { ok: true }; }
+        if (message.type === 'clf-tab-close-check') return { safe: true, conversationId: null, navigationEpoch: 0 };
+        return { ok: true };
+      }
+    });
+    await worker.registerTab(4, 'catalog-document');
+
+    await worker.fireAlarm();
+
+    expect(worker.tabsRemove).toHaveBeenCalledWith(4);
+  });
 });
 
 describe('extension observation journal', () => {

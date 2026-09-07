@@ -29,7 +29,7 @@ const installedUpdater = path.join(dataDir, 'rocaniiru-updater.js');
 const configPath = path.join(dataDir, 'config.json');
 const statePath = path.join(dataDir, 'state.json');
 const extensionId = 'lcggilneomlkgcaeniefpkadadpfbgfn';
-const patchCommit = 'c54477eb11e1cd409dfb6af8694ef771380fd722';
+const patchCommit = '77a421ade7bf8c047811e3e124de1cdfabef8d51';
 
 function plistValue(key) {
   return execFileSync('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, path.join(appPath, 'Contents', 'Info.plist')], { encoding: 'utf8' }).trim();

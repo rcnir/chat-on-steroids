@@ -11,7 +11,8 @@ it('records browser creation failure before claim and retries the same obligatio
     ? { ok: true, data: { requests: [request] } } : { ok: true });
   const createChatTab = vi.fn().mockRejectedValueOnce(new Error('window size rejected')).mockResolvedValueOnce({ id: 8 });
   const context = vm.createContext({ call, createChatTab, URL, setTimeout, clearTimeout,
-    CHATGPT_TAB_URLS: ['https://chatgpt.com/*'], chrome: { tabs: { query: async () => [] } } });
+    CHATGPT_TAB_URLS: ['https://chatgpt.com/*'], dismissedPluginRefreshes: [], pluginRefreshTabs: {}, pluginRefreshBatchIds: [], pluginRefreshInternalCloses: new Set(), persistLive: async () => undefined,
+    chrome: { tabs: { query: async () => [] } } });
   vm.runInContext(`${workflow}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);
   await context.run([{}], true);
   const actions = call.mock.calls.map(([, init]) => JSON.parse(init.body));

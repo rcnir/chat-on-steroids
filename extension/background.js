@@ -215,10 +215,30 @@ let settled = [];
  *
  * Unlike the observation journal this lives in storage.local. A browser restart clears
  * storage.session, and "browser closed while the worker's final answer is still settling" is a
- * normal wait, not permission to lose the wake request. Stale markers are harmless because the
- * bridge redeem is still the authority fence and rejects commands that no longer exist.
+ * normal wait, not permission to lose the wake request. The marker is bounded to the same
+ * authority window as the app command below, so an orphan cannot keep opening tabs after the
+ * bridge has already retired the wake.
  */
 let deferredRevivals = [];
+/**
+ * Browser-side custody must never outlive the app command that authorized it.
+ *
+ * The bridge gives a worker revival an absolute 90-second deadline. Keeping this inert marker
+ * longer than that cannot make delivery succeed — `/commands/redeem` will already reject it —
+ * but it can keep recreating the exact worker tab on every service-worker/browser lifetime.
+ * Match the bridge deadline so an orphaned local marker is retired before it can open a tab.
+ */
+const DEFERRED_REVIVAL_TTL_MS = 90_000;
+/** Plugin-refresh helper requests the user has explicitly dismissed by closing their helper tab. */
+let dismissedPluginRefreshes = [];
+/** App-owned plugin refresh helper tabs, keyed by Chrome tab id. */
+let pluginRefreshTabs = {};
+/** The current app-side refresh batch; closing its helper dismisses the whole batch. */
+let pluginRefreshBatchIds = [];
+/** Plugin helper tabs this worker itself is closing; their onRemoved event is cleanup, not user dismissal. */
+const pluginRefreshInternalCloses = new Set();
+/** App-owned model-catalog helpers, retained across service-worker restarts even if ChatGPT drops their query marker. */
+let modelCatalogHelpers = {};
 /** One in-flight same-tab offer per deferred command in this MV3 worker lifetime. */
 const deferredRevivalOffers = new Map();
 /** App says an active agent/recovery episode still needs the maintenance cadence. */
@@ -240,13 +260,16 @@ function load() {
 }
 
 async function loadOnce() {
-  const stored = await chrome.storage.local.get(['port', 'token', 'disconnected', 'deferredRevivals', 'commandAckOutbox']);
+  const stored = await chrome.storage.local.get(['port', 'token', 'disconnected', 'deferredRevivals', 'dismissedPluginRefreshes', 'commandAckOutbox']);
   port = typeof stored.port === 'number' ? stored.port : null;
   token = typeof stored.token === 'string' ? stored.token : null;
   // Deliberately in `local` rather than `session`: a choice to disconnect that a browser
   // restart undoes is not a choice, it is a delay.
   disconnected = stored.disconnected === true;
   deferredRevivals = Array.isArray(stored.deferredRevivals) ? stored.deferredRevivals.slice(-100) : [];
+  dismissedPluginRefreshes = Array.isArray(stored.dismissedPluginRefreshes)
+    ? stored.dismissedPluginRefreshes.filter(value => typeof value === 'string' && /^[a-f0-9-]{36}$/i.test(value)).slice(-40)
+    : [];
   const live = await chrome.storage.session.get([
     'settled',
     'journal',
@@ -259,6 +282,9 @@ async function loadOnce() {
     'commandAckOutbox',
     'recoveryMonitoring',
     'discardProtectedTabs',
+    'pluginRefreshTabs',
+    'pluginRefreshBatchIds',
+    'modelCatalogHelpers',
     'delivery'
   ]);
   settled = Array.isArray(live.settled) ? live.settled : [];
@@ -290,6 +316,15 @@ async function loadOnce() {
   discardProtectedTabs = Object.fromEntries(
     Object.entries(savedDiscardProtection).filter(([id, owned]) => /^\d+$/.test(id) && owned === true)
   );
+  pluginRefreshTabs = live.pluginRefreshTabs && typeof live.pluginRefreshTabs === 'object' && !Array.isArray(live.pluginRefreshTabs)
+    ? Object.fromEntries(Object.entries(live.pluginRefreshTabs).filter(([id, request]) => /^\d+$/.test(id) && typeof request === 'string' && /^[a-f0-9-]{36}$/i.test(request)))
+    : {};
+  pluginRefreshBatchIds = Array.isArray(live.pluginRefreshBatchIds)
+    ? live.pluginRefreshBatchIds.filter(value => typeof value === 'string' && /^[a-f0-9-]{36}$/i.test(value)).slice(0, 2)
+    : [];
+  modelCatalogHelpers = live.modelCatalogHelpers && typeof live.modelCatalogHelpers === 'object' && !Array.isArray(live.modelCatalogHelpers)
+    ? Object.fromEntries(Object.entries(live.modelCatalogHelpers).filter(([id, nonce]) => /^\d+$/.test(id) && typeof nonce === 'string' && /^[a-f0-9-]{36}$/i.test(nonce)))
+    : {};
   if (live.delivery && typeof live.delivery === 'object' && !Array.isArray(live.delivery)) {
     delivery = { ...delivery, ...live.delivery };
   }
@@ -316,13 +351,17 @@ function persistLive() {
         commandAckOutbox: commandAckOutbox.slice(-200),
         recoveryMonitoring,
         discardProtectedTabs,
+        pluginRefreshTabs,
+        pluginRefreshBatchIds,
+        modelCatalogHelpers,
         delivery
       }),
       // Only small command-control metadata crosses browser restarts. No transcript and no
       // revival text is duplicated into extension storage.
       chrome.storage.local.set({
         commandAckOutbox: commandAckOutbox.slice(-200),
-        deferredRevivals: deferredRevivals.slice(-100)
+        deferredRevivals: deferredRevivals.slice(-100),
+        dismissedPluginRefreshes: dismissedPluginRefreshes.slice(-40)
       })
     ])
   );
@@ -1774,21 +1813,45 @@ function inspectRequestedPluginRefresh(publications, background) {
   pluginRefreshFlight = (async () => {
     const pending = await call('/plugin-refresh', { method: 'POST', body: JSON.stringify({ action: 'pending' }) });
     if (!pending.ok || !Array.isArray(pending.data?.requests)) return;
-    const requests = pending.data.requests.slice(0, 2);
+    const appRequests = pending.data.requests
+      .filter(request => request && typeof request.id === 'string' && /^[a-f0-9-]{36}$/i.test(request.id))
+      .slice(0, 2);
+    pluginRefreshBatchIds = appRequests.map(request => request.id);
+    const requests = appRequests.filter(request => !dismissedPluginRefreshes.includes(request.id));
     const tabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
+    let changedTracking = false;
+    for (const tab of tabs) {
+      const id = pluginRefreshMarker(tab);
+      if (!id || !Number.isInteger(tab?.id)) continue;
+      if (pluginRefreshTabs[String(tab.id)] !== id) {
+        pluginRefreshTabs[String(tab.id)] = id;
+        changedTracking = true;
+      }
+    }
+    if (changedTracking) await persistLive();
     for (const tab of tabs) {
       const id = pluginRefreshMarker(tab);
       if (!id || requests.some(request => request.id === id)) continue;
       let timer;
       const proof = await Promise.race([chrome.tabs.sendMessage(tab.id, { type: 'clf-plugin-refresh-state', id }).catch(() => null), new Promise(resolve => { timer = setTimeout(() => resolve(null), 3000); })]).finally(() => clearTimeout(timer));
       if (proof?.safe !== true) return;
-      if (pluginRefreshMarker(await chrome.tabs.get(tab.id).catch(() => null)) === id) await chrome.tabs.remove(tab.id);
+      if (pluginRefreshMarker(await chrome.tabs.get(tab.id).catch(() => null)) === id) {
+        pluginRefreshInternalCloses.add(tab.id);
+        try { await chrome.tabs.remove(tab.id); }
+        catch { pluginRefreshInternalCloses.delete(tab.id); throw new Error('plugin_refresh_helper_close_failed'); }
+      }
     }
     if (!requests.length) return;
     const held = tabs.find(tab => requests.some(request => request.id === pluginRefreshMarker(tab)));
     const request = requests.find(request => request.id === pluginRefreshMarker(held)) || requests[0];
     if (!held) {
-      try { await createChatTab(`https://chatgpt.com/?cos-plugin-refresh=${request.id}#settings/Plugins${request.appId ? `/plugin_${request.appId}` : ''}`, background); }
+      try {
+        const created = await createChatTab(`https://chatgpt.com/?cos-plugin-refresh=${request.id}#settings/Plugins${request.appId ? `/plugin_${request.appId}` : ''}`, background);
+        if (Number.isInteger(created?.id)) {
+          pluginRefreshTabs[String(created.id)] = request.id;
+          await persistLive();
+        }
+      }
       catch {
         // Preserve the pre-claim obligation and expose the failed browser boundary.
         // Swallowing this error made a due request look as if its wake never arrived.
@@ -1816,19 +1879,37 @@ function catalogTabNonce(tab) {
     return url.origin === 'https://chatgpt.com' && url.pathname === '/' && /^[a-f0-9-]{36}$/i.test(nonce || '') ? nonce : null;
   } catch { return null; }
 }
+function trackedCatalogNonce(tab) {
+  if (!Number.isInteger(tab?.id)) return null;
+  return catalogTabNonce(tab) || (/^[a-f0-9-]{36}$/i.test(modelCatalogHelpers[String(tab.id)] || '') ? modelCatalogHelpers[String(tab.id)] : null);
+}
 function inspectRequestedModels(request) {
   if (modelCatalogFlight) return modelCatalogFlight;
   const wanted = request && /^[a-f0-9-]{36}$/i.test(request.nonce) && Number.isFinite(request.expiresAt) && Date.now() < request.expiresAt ? request : null;
   modelCatalogFlight = (async () => {
     let observed = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
+    let helperTrackingChanged = false;
+    for (const candidate of observed) {
+      const nonce = catalogTabNonce(candidate);
+      if (!nonce || !Number.isInteger(candidate?.id) || modelCatalogHelpers[String(candidate.id)] === nonce) continue;
+      modelCatalogHelpers[String(candidate.id)] = nonce;
+      helperTrackingChanged = true;
+    }
+    if (helperTrackingChanged) await persistLive();
     const retireCatalogTab = async (candidate) => {
-      if (!candidate?.id || !catalogTabNonce(candidate)) return false;
+      const nonce = trackedCatalogNonce(candidate);
+      if (!candidate?.id || !nonce) return false;
       const key = String(candidate.id);
       const source = { tab: candidate.id, documentId: tabDocuments[key], navigationEpoch: tabEpochs[key] };
       if (!source.documentId || !ownsDocument(source)) return false;
       try {
         const before = await chrome.tabs.get(candidate.id);
-        if (!before || before.pendingUrl || !catalogTabNonce(before) || conversationFromUrl(before.url)) return false;
+        const disposable = (tab) => {
+          if (!tab || tab.pendingUrl || conversationFromUrl(tab.url) || trackedCatalogNonce(tab) !== nonce) return false;
+          try { const url = new URL(tab.url || ''); return url.origin === 'https://chatgpt.com' && url.pathname === '/'; }
+          catch { return false; }
+        };
+        if (!disposable(before)) return false;
         let timer;
         const proof = await Promise.race([
           chrome.tabs.sendMessage(candidate.id, { type: 'clf-tab-close-check', conversationId: null }, { documentId: source.documentId }),
@@ -1836,14 +1917,16 @@ function inspectRequestedModels(request) {
         ]).finally(() => clearTimeout(timer));
         const latest = await chrome.tabs.get(candidate.id);
         if (proof?.safe !== true || proof.conversationId !== null || proof.navigationEpoch !== source.navigationEpoch || !ownsDocument(source) ||
-          latest.pendingUrl || !catalogTabNonce(latest) || conversationFromUrl(latest.url)) return false;
+          !disposable(latest)) return false;
         await chrome.tabs.remove(candidate.id);
+        delete modelCatalogHelpers[key];
+        await persistLive();
         return true;
       } catch { return false; }
     };
     const retireLegacyHelpers = async (exceptId = null) => {
       for (const candidate of observed) {
-        if (candidate.id === exceptId || !catalogTabNonce(candidate) || candidate.pendingUrl) continue;
+        if (candidate.id === exceptId || !trackedCatalogNonce(candidate) || candidate.pendingUrl) continue;
         await retireCatalogTab(candidate);
       }
     };
@@ -3009,6 +3092,21 @@ function conversationForTab(tab) {
 // same tab id, while closing it wakes the service worker and retires only that tab's claim.
 chrome.tabs.onRemoved.addListener((id) => {
   clearDeferredRevivalOffersForTab(id);
+  if (modelCatalogHelpers[String(id)]) {
+    delete modelCatalogHelpers[String(id)];
+    void persistLive().catch(() => undefined);
+  }
+  const pluginRefreshId = pluginRefreshTabs[String(id)];
+  if (pluginRefreshId) {
+    const internalClose = pluginRefreshInternalCloses.delete(id);
+    if (!internalClose) {
+      const dismissed = [...new Set([...dismissedPluginRefreshes, ...pluginRefreshBatchIds, pluginRefreshId])].filter(value => /^[a-f0-9-]{36}$/i.test(value));
+      dismissedPluginRefreshes = dismissed.slice(-40);
+      pluginRefreshBatchIds = [];
+    }
+    delete pluginRefreshTabs[String(id)];
+    void persistLive().catch(() => undefined);
+  }
   void serializeTab(id, async () => {
     const documentId = await markTerminal(id);
     return releaseTab(id, null, documentId);
@@ -3242,9 +3340,15 @@ function recoverDeferredRevivals() {
     // A durable terminal page result supersedes its pre-send recovery marker. This matters on a
     // browser restart between ChatGPT accepting the message and the app accepting the ACK.
     const ackIds = new Set(commandAckOutbox.map((entry) => deferredRevivalId(entry?.id)).filter(Boolean));
+    const now = Date.now();
     const before = deferredRevivals.length;
     deferredRevivals = deferredRevivals.filter(
-      (entry) => deferredRevivalId(entry?.id) && cleanConversationId(entry?.conversationId) && !ackIds.has(entry.id)
+      (entry) =>
+        deferredRevivalId(entry?.id) &&
+        cleanConversationId(entry?.conversationId) &&
+        Number.isFinite(entry?.queuedAt) &&
+        now - entry.queuedAt < DEFERRED_REVIVAL_TTL_MS &&
+        !ackIds.has(entry.id)
     );
     if (deferredRevivals.length !== before) await persistLive();
     if (deferredRevivals.length === 0) return;
