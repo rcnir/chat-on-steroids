@@ -30,6 +30,7 @@ const configPath = path.join(dataDir, 'config.json');
 const statePath = path.join(dataDir, 'state.json');
 const extensionId = 'lcggilneomlkgcaeniefpkadadpfbgfn';
 const patchCommit = 'a871b31cca4240121d351a93bf38c5b822335ae9';
+const adoptCurrentPatch = process.argv.includes('--adopt-current-patch');
 
 function plistValue(key) {
   return execFileSync('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, path.join(appPath, 'Contents', 'Info.plist')], { encoding: 'utf8' }).trim();
@@ -76,17 +77,26 @@ const bundled = path.join(appPath, 'Contents', 'Resources', 'extension');
 const bundledFingerprint = extensionFingerprint(bundled);
 const previousState = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : {};
 const previousConfig = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf8')) : {};
+// Initial installation preserves the already-validated current patch. Once an app update is
+// observed, however, a re-install must bootstrap from that new app's own extension rather than
+// blessing the previous version's patched stable tree with the new fingerprint.
+const appChanged = Boolean(previousState.seenBundledFingerprint && previousState.seenBundledFingerprint !== bundledFingerprint);
 const temp = mkdtempSync(path.join(os.tmpdir(), 'rocaniiru-updater-install-'));
 try {
   const tree = path.join(temp, 'extension');
-  // Initial installation preserves the already-validated current patch. Once an app update is
-  // observed, however, a re-install must bootstrap from that new app's own extension rather than
-  // blessing the previous version's patched stable tree with the new fingerprint.
-  const appChanged = Boolean(previousState.seenBundledFingerprint && previousState.seenBundledFingerprint !== bundledFingerprint);
   cpSync(appChanged ? bundled : stableExtension, tree, { recursive: true, force: true });
   injectUpdaterBootstrap(tree, installedUpdater, { version, bundledFingerprint });
   replaceStable(tree);
 } finally { rmSync(temp, { recursive: true, force: true }); }
+
+if (adoptCurrentPatch) {
+  if (appChanged) throw new Error('Cannot adopt a same-version patch while the bundled app extension has changed.');
+  const sourceFingerprint = extensionFingerprint(path.join(repo, 'extension'));
+  const stableFingerprint = extensionFingerprint(stableExtension);
+  if (sourceFingerprint !== stableFingerprint) {
+    throw new Error('Stable extension does not exactly match the validated local ROCANIIRU source; refusing adoption.');
+  }
+}
 
 writeJson(configPath, {
   schema: 1,
@@ -103,11 +113,11 @@ writeJson(statePath, {
   schema: 1,
   seenAppVersion: version,
   seenBundledFingerprint: bundledFingerprint,
-  appliedVersion: previousState.appliedVersion ?? version,
-  appliedPatchCommit: previousState.appliedPatchCommit ?? patchCommit,
+  appliedVersion: adoptCurrentPatch ? version : previousState.appliedVersion ?? version,
+  appliedPatchCommit: adoptCurrentPatch ? patchCommit : previousState.appliedPatchCommit ?? patchCommit,
   reloadRequired: false,
   lastError: null,
-  lastAppliedAt: previousState.lastAppliedAt ?? Date.now()
+  lastAppliedAt: adoptCurrentPatch ? Date.now() : previousState.lastAppliedAt ?? Date.now()
 });
 
 const node = '/opt/homebrew/bin/node';
