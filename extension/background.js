@@ -1608,6 +1608,12 @@ function cleanConversationId(value) {
 async function organizerWorkerState(value) {
   const conversationId = cleanConversationId(value);
   if (!conversationId) return { ok: false, error: 'bad_conversation_id' };
+
+  // Let the companion perform its ordinary maintenance pass, which safely consumes repairs,
+  // revivals and tab policy in one place. The Organizer never calls /status itself.
+  await load();
+  try { await maintain(); } catch { /* A stale/unavailable policy fails closed below. */ }
+
   const result = await call(`/activity?conversationId=${encodeURIComponent(conversationId)}&since=0`);
   if (!result.ok || !result.data || typeof result.data !== 'object') {
     return { ok: false, error: result.error || result.data?.error || 'worker_state_unavailable' };
@@ -1620,12 +1626,18 @@ async function organizerWorkerState(value) {
     ? result.data.bootstrapAgent
     : null;
   const workerId = retired && typeof retired.id === 'string' && retired.id ? retired.id : bootstrapAgent;
+  const policyFresh = organizerPolicyObservedAt > 0 && Date.now() - organizerPolicyObservedAt <= 60_000;
   return {
     ok: true,
     conversationId,
     worker,
     workerId,
+    // Exact app-owned answer that this tab is now disposable. The app currently places stopped
+    // worker chats here after its own quiescence/idle policy; active and waking work never qualifies.
+    tabClosable: policyFresh && organizerClosableConversations.has(conversationId),
     retired: retired !== null,
+    // Deletion stays fail-closed until the app has a dedicated report-ACK cleanup projection.
+    cleanupReady: false,
     retirement: retired
       ? {
           reason: typeof retired.reason === 'string' ? retired.reason.slice(0, 500) : '',
@@ -2019,6 +2031,10 @@ function inspectRequestedModels(request) {
 
 let maintenanceFlight = null;
 let maintenanceAgain = false;
+// Most recent app-owned tab-close policy. External Organizer reads only this narrow,
+// already-processed projection; it never consumes /status work itself.
+let organizerClosableConversations = new Set();
+let organizerPolicyObservedAt = 0;
 let wakeSocket = null;
 function closeWakeSocket() {
   const previous = wakeSocket; wakeSocket = null;
@@ -2176,6 +2192,8 @@ async function maintainOnce() {
       .map(cleanConversationId)
       .filter((conversationId) => conversationId && !nonDiscardable.has(conversationId))
   );
+  organizerClosableConversations = new Set(closable);
+  organizerPolicyObservedAt = Date.now();
   const managedWork = Array.isArray(reply.data.managedConversations) && reply.data.managedConversations.length > 0;
   if (!protectionWork && !managedWork && closable.size === 0 && repairs.length === 0) return clearRetryIfIdle();
   let tabs = [];

@@ -1071,27 +1071,37 @@ describe('Project Organizer lifecycle bridge', () => {
   const paired = { port: 8765, token: 'paired-token' };
   const CHAT = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 
-  it('returns only a narrow non-retired worker projection to the authorized Organizer', async () => {
+  it('returns only a narrow app-owned tab-close projection to the authorized Organizer', async () => {
     const fetch = vi.fn(async (input: string) => {
       const url = new URL(input);
       if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      if (url.pathname === '/status') return response(200, {
+        ok: true, repairs: [], closableConversations: [CHAT], managedConversations: [CHAT]
+      });
       if (url.pathname === '/activity') return response(200, {
         sessionId: 'secret-session-id', bootstrap: 'worker', bootstrapAgent: 'worker-7',
         entries: [{ tool: 'exec_command', summary: 'must not escape' }], stream: [{ text: 'private activity' }]
       });
       return response(404, {});
     });
-    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
+    const worker = loadWorker({
+      local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch,
+      tabsQuery: async () => [{ id: 1, windowId: 7, url: `https://chatgpt.com/c/${CHAT}` }]
+    });
     const result = await worker.sendExternal({ type: 'cos-organizer-worker-state', conversationId: CHAT });
-    expect(result).toEqual({ ok: true, conversationId: CHAT, worker: true, workerId: 'worker-7', retired: false, retirement: null });
+    expect(result).toEqual({
+      ok: true, conversationId: CHAT, worker: true, workerId: 'worker-7',
+      tabClosable: true, retired: false, cleanupReady: false, retirement: null
+    });
     expect(JSON.stringify(result)).not.toMatch(/secret-session|exec_command|private activity/);
     expect(fetch.mock.calls.some(([input]) => new URL(String(input)).pathname === '/activity')).toBe(true);
   });
 
-  it('projects exact retired-worker authority without exposing activity contents', async () => {
+  it('projects retired identity but keeps ChatGPT-history cleanup disabled without dedicated app proof', async () => {
     const fetch = vi.fn(async (input: string) => {
       const url = new URL(input);
       if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      if (url.pathname === '/status') return response(200, { ok: true, repairs: [], closableConversations: [] });
       if (url.pathname === '/activity') return response(200, {
         sessionId: 'secret-session-id', entries: [{ raw: 'nope' }],
         retiredWorker: { id: 'worker-3', reason: 'its parked worker history was dropped', retiredAt: 1788800000000 }
@@ -1101,7 +1111,8 @@ describe('Project Organizer lifecycle bridge', () => {
     const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
     const result = await worker.sendExternal({ type: 'cos-organizer-worker-state', conversationId: CHAT });
     expect(result).toEqual({
-      ok: true, conversationId: CHAT, worker: true, workerId: 'worker-3', retired: true,
+      ok: true, conversationId: CHAT, worker: true, workerId: 'worker-3',
+      tabClosable: false, retired: true, cleanupReady: false,
       retirement: { reason: 'its parked worker history was dropped', retiredAt: 1788800000000 }
     });
     expect(JSON.stringify(result)).not.toMatch(/secret-session|"raw"/);
