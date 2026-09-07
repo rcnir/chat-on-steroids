@@ -1128,7 +1128,7 @@ describe('Project Organizer lifecycle bridge', () => {
     const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
     const result = await worker.sendExternal({ type: 'cos-organizer-worker-state', conversationId: CHAT }, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     expect(result).toEqual({ ok: false, error: 'forbidden_sender' });
-    expect(fetch.mock.calls.some(([input]) => new URL(String(input)).pathname === '/activity')).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 
