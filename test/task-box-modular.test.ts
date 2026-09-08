@@ -41,7 +41,7 @@ async function harness() {
 
 describe('independent TASK BOX package contract', () => {
   it('never admits an unknown release or unknown official main bytes', () => {
-    expect(() => releaseFor('2.0.8')).toThrow(/UNSUPPORTED_RELEASE/);
+    expect(() => releaseFor('2.0.999')).toThrow(/UNSUPPORTED_RELEASE/);
     expect(() => composeMain('not an official bundle', '2.0.7')).toThrow(/HASH_MISMATCH/);
     expect(featureFingerprint()).toMatch(/^[a-f0-9]{64}$/);
   });
@@ -57,7 +57,7 @@ describe('independent TASK BOX package contract', () => {
     expect(build).toContain("'../../package-lock.json'");
   });
 
-  it.each(['2.0.6', '2.0.7'])('generates separate feature and upstream %s identities', version => {
+  it.each(['2.0.6', '2.0.7', '2.0.8'])('generates separate feature and upstream %s identities', version => {
     const box: any = {};
     vm.runInNewContext(compatibilityScript(version), box);
     expect(box.CLFTaskBoxCompatibility).toMatchObject({ appVersion: version, featureVersion: '1.0.0', protocol: 1, adapterRevision: 2 });
@@ -130,7 +130,7 @@ describe.skipIf(!process.env.COS_TASK_BOX_RELEASE_TEST_ROOT)('official distribut
     await fs.writeFile(path.join(copy, 'Contents/Resources/extra-untrusted-payload'), 'not in official archive');
     expect(() => inspectOfficialApp(copy)).toThrow(/OFFICIAL_BUNDLE_HASH_MISMATCH/);
   });
-  it.each(['2.0.6', '2.0.7'])('keeps upstream %s auth gates and executes the addon through the actual compiled handler', async version => {
+  it.each(['2.0.6', '2.0.7', '2.0.8'])('keeps upstream %s auth gates and executes the addon through the actual compiled handler', async version => {
     const app = path.join(process.env.COS_TASK_BOX_RELEASE_TEST_ROOT!, version, 'unpacked/Chat On Steroids.app');
     const inspected = inspectOfficialApp(app);
     expect(inspected.main.insertedBytes).toBe(673);

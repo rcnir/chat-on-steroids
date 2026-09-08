@@ -12,7 +12,7 @@ export function releaseFor(version) {
   return feature.releases[version];
 }
 
-// These are the actual two official release bundles, not guessed minified names.
+// These seams are verified against the catalogued official bundles, not guessed names.
 // The full input hash is checked before these seams are ever used for packaging.
 export const OFFICIAL_CLEAR = `async () => {
     resetSwarm();

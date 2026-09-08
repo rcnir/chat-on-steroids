@@ -8,7 +8,7 @@ import { composeBackground } from '../patcher/task-box/extension-adapter.mjs';
 const repo = process.cwd();
 const adapterSource = readFileSync(path.join(repo, 'patcher/task-box/extension-adapter.mjs'), 'utf8');
 
-function official(appVersion: '2.0.6' | '2.0.7') {
+function official(appVersion: '2.0.6' | '2.0.7' | '2.0.8') {
   return execFileSync('git', ['show', `v${appVersion}:extension/background.js`], {
     cwd: repo,
     encoding: 'utf8',
@@ -16,7 +16,7 @@ function official(appVersion: '2.0.6' | '2.0.7') {
   });
 }
 
-function compose(appVersion: '2.0.6' | '2.0.7', source = official(appVersion)) {
+function compose(appVersion: '2.0.6' | '2.0.7' | '2.0.8', source = official(appVersion)) {
   return composeBackground(source, { appVersion, featureVersion: 'task-box-1.0.0', protocol: 1 });
 }
 
@@ -36,7 +36,7 @@ function injectedBlocks(source: string) {
 }
 
 describe('TASK BOX official background composer', () => {
-  it.each(['2.0.6', '2.0.7'] as const)('composes exact official %s at narrow seams only', (appVersion) => {
+  it.each(['2.0.6', '2.0.7', '2.0.8'] as const)('composes exact official %s at narrow seams only', (appVersion) => {
     const source = official(appVersion);
     const output = compose(appVersion, source);
 
@@ -65,7 +65,7 @@ describe('TASK BOX official background composer', () => {
     expect(() => new Function(output)).not.toThrow();
   });
 
-  it.each(['2.0.6', '2.0.7'] as const)('keeps official auth and document ownership around TASK BOX handling on %s', (appVersion) => {
+  it.each(['2.0.6', '2.0.7', '2.0.8'] as const)('keeps official auth and document ownership around TASK BOX handling on %s', (appVersion) => {
     const output = compose(appVersion);
     expect(output).toContain('authorization: `Bearer ${token}`');
     expect(output).toContain('...versionHeaders(),');
@@ -111,15 +111,15 @@ describe('TASK BOX official background composer', () => {
       .toThrow(/RECOVERY_RESTORE_SEAM_DRIFT/);
   });
 
-  it('fails closed on authenticated call or current-document guard drift', () => {
-    const source = official('2.0.7');
-    expect(() => compose('2.0.7', source.replace('authorization: `Bearer ${token}`', 'authorization: token')))
+  it.each(['2.0.7', '2.0.8'] as const)('fails closed on authenticated call or current-document guard drift on %s', (appVersion) => {
+    const source = official(appVersion);
+    expect(() => compose(appVersion, source.replace('authorization: `Bearer ${token}`', 'authorization: token')))
       .toThrow(/AUTH_DRIFT/);
-    expect(() => compose('2.0.7', source.replace(
+    expect(() => compose(appVersion, source.replace(
       'tabDocuments[key] === source.documentId &&',
       'tabDocuments[key] == source.documentId &&'
     ))).toThrow(/DOCUMENT_GUARD_DRIFT/);
-    expect(() => compose('2.0.7', source.replace(
+    expect(() => compose(appVersion, source.replace(
       'const current = prior.then(operation, operation);',
       'const current = prior.then(operation);'
     ))).toThrow(/DOCUMENT_GUARD_DRIFT/);
@@ -130,7 +130,7 @@ describe('TASK BOX official background composer', () => {
     const v207 = official('2.0.7');
     expect(() => composeBackground(v207, { appVersion: '2.0.6', featureVersion: '1.0.0', protocol: 1 }))
       .toThrow(/SOURCE_VERSION_DRIFT/);
-    expect(() => composeBackground(v206, { appVersion: '2.0.8', featureVersion: '1.0.0', protocol: 1 }))
+    expect(() => composeBackground(v206, { appVersion: '2.0.999', featureVersion: '1.0.0', protocol: 1 }))
       .toThrow(/UNSUPPORTED_APP_VERSION/);
     expect(() => composeBackground(v206, { appVersion: '3.0.0', featureVersion: '1.0.0', protocol: 1 }))
       .toThrow(/UNSUPPORTED_APP_MAJOR/);

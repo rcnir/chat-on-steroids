@@ -18,7 +18,7 @@
 | TASK BOX 機能 | `patcher/task-box/feature.json` の `featureVersion` | Project 操作・Clear 連携・不具合修正の版。本体と独立して更新する |
 | 接続契約 | 同ファイルの `protocol`、`adapterRevision`、`releases` | TASK BOX protocol、DOM adapter、検証済みの本体・companion の組み合わせ |
 
-現行カタログの対象は **macOS / Apple silicon、2.0.6 と 2.0.7**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.0`、TASK BOX protocol は `1`、作成ダイアログ修正は adapter revision `2` です。
+現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.0`、TASK BOX protocol は `1`、作成ダイアログ修正は adapter revision `2` です。
 
 ## ソースの配置
 
@@ -141,7 +141,7 @@ COS_TASK_BOX_RELEASE_TEST_ROOT="/path/to/verified-upstream" \
   npx vitest run test/task-box-modular.test.ts
 ```
 
-対象フォルダ形式は `<root>/2.0.6/unpacked/Chat On Steroids.app`、`<root>/2.0.7/unpacked/Chat On Steroids.app`。このテストは公式handlerの認証境界とClear callbackを、隔離された保存先・依存関数で実行します。Electron本体や稼働中アプリは起動しません。
+対象フォルダ形式は `<root>/<version>/unpacked/Chat On Steroids.app` で、version は `2.0.6`・`2.0.7`・`2.0.8`。このテストは公式handlerの認証境界とClear callbackを、隔離された保存先・依存関数で実行します。Electron本体や稼働中アプリは起動しません。
 
 必須の負例: 未知版／main不一致／認証失敗／古いdocument／重複request／応答喪失／保存失敗／壊れたreceipt／古いpending状態／機能無効化後の削除／曖昧なProject・入力欄。既存のnative dialogと空のTASK BOX再作成の回帰も維持します。
 
@@ -177,6 +177,16 @@ updaterは `taskBoxAddon: true`、暗黙の `defaultPatchCommit` は `null` に�
 
 更新前から開かれていた実装チャットと旧Projectタブのスクリプト観測はタイムアウトし、それらのページ内コードまで更新済みとは確認していません。進行中のチャットを強制再読み込みせず、新規Projectビューで検証しました。古いタブは使用前に一度再読み込みし、新規ビューで得た実行版確認と混同しないこと。
 
-切替runnerは終了済みで再実行されていませんが、その後の02:45頃（日本時間）に別の終了・起動が1回アプリログに記録されています。起点は特定していません。後続の実機検証時も、本体全体は検証済み2.0.7候補と一致しています。
+切替runnerは終了済みで再実行されていませんが、その後の02:45頃（日本時間）に別の終了・起動が1回アプリログに記録されています。当時は起点未特定として記録しましたが、その後ユーザーから、macOSの権限再承認に伴って手動再起動したとの説明がありました。後続の実機検証時も、本体全体は検証済み2.0.7候補と一致しています。
 
 切替前後でClear receiptファイルのhashは一致し、既存3件の完了記録とgeneration 3 / presentを保持しています。この切替ではClear・Project削除・Project再作成を実行していません。**2.0.7分離版の本番切替と自動移動は確認済みですが、同版での破壊的なBOX CLEAR通し実機テストは未実施です。** 2.0.6の実機結果と197件の隔離テストを、その代わりの新しい実機PASSとして扱いません。候補作成時のdescriptorも、後日の実機結果で書き換えません。
+
+## 2.0.8対応 — 2026-09-09
+
+公式 `v2.0.8` のmacOS arm64 ZIPを、release asset digestと同梱SHA256SUMSの両方で照合し、本体全体・main・companionのfingerprintを対応表へ追加しました。Bridge protocolは13、TASK BOX機能は1.0.0、TASK BOX protocolは1、adapter revisionは2のままです。
+
+公式Clear本文と、companionの `call` / `authorizeDocument` / `ownsDocument` / `serializeTab` / `restoreChatgptTab` / `restoreOpenChatgptTabs` は、2.0.7から変更されていません。TASK BOXのruntime、ブラウザ側機能、接続処理のロジックは変更せず、対応カタログとテスト行列だけを拡張しました。公式mainへの追加は引き続き673バイトです。旧helper/model-picker等の独自修正は取り込みません。
+
+2.0.8未登録時の拒否を回帰テストで確認した後、2.0.6・2.0.7・2.0.8の公式配布物を含む関連12ファイル **202/202成功**を確認しました。`npm run verify` は **2,948成功・104スキップ・1失敗**で、失敗は従来と同じbundled ripgrepのPATH選択です。104スキップのうち4件のrelease-matrixテストは、上記202件の実行で別途成功しています。型チェックは成功し、配布候補の署名・ASAR整合性・入力保持も検証済みです。候補作成時点では2.0.8の実機受け入れは未実施です。
+
+この更新の出発点は、既に切替済みの2.0.7です。過去の調査文にある「2.0.6から直接2.0.8へ」という予定を、現物確認なしに実行しません。権限再承認が必要な場合はユーザーがmacOS側で行い、必要な手動再起動を更新記録に分けて残します。パッチャーがTCC設定を変更・リセットしたり、再起動を繰り返して解消しようとしたりしません。
