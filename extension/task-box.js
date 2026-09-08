@@ -4,6 +4,7 @@
   const C = globalThis.CLFTaskBoxCore;
   if (!C) return;
   const PROTOCOL = 1;
+  const ADAPTER_REVISION = 2;
   const COMPANION_VERSION = '2.0.6';
   const FEATURE_KEY = 'taskBoxIntegrationEnabled';
 
@@ -757,20 +758,32 @@
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
+  function openProjectDialogs() {
+    // Native <dialog> has an implicit role; [role="dialog"] alone misses it.
+    // Closed, mounted dialog shells must not count as pre-existing open dialogs.
+    return [...document.querySelectorAll('dialog[open], [role="dialog"]')]
+      .filter(node => !node.closest('dialog:not([open])') && visible(node));
+  }
+
   function findProjectNameInput(dialog) {
     if (!dialog?.isConnected) return null;
-    return Array.from(dialog.querySelectorAll('input, textarea')).find(element => {
-      const aria = element.getAttribute('aria-label') || '';
-      const placeholder = element.getAttribute('placeholder') || '';
-      return visible(element) && /プロジェクト名|project name/i.test(`${aria} ${placeholder}`);
-    }) || Array.from(dialog.querySelectorAll('input[type="text"], input:not([type]), textarea')).find(visible) || null;
+    const inputs = [...dialog.querySelectorAll('input[type="text"], input:not([type]), textarea')].filter(element => {
+      if (!visible(element) || element.disabled || element.readOnly) return false;
+      const names = [element.getAttribute('aria-label'), ...[...(element.labels || [])].map(label => text(label)),
+        ...(element.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+          .map(id => document.getElementById(id)).filter(label => label && dialog.contains(label)).map(label => text(label))];
+      return names.some(name => /^(プロジェクト名|project name)$/i.test(C.normalizeText(name || ''))) ||
+        (element.id === 'project-name' && element.name === 'projectName');
+    });
+    if (inputs.length > 1) throw new Error('PROJECT_NAME_INPUT_AMBIGUOUS');
+    return inputs[0] || null;
   }
 
   async function fillAndCreateTaskBox(priorDialogs, guard) {
     const dialog = await waitFor(() => {
       guard.assert();
-      const dialogs = [...document.querySelectorAll('[role="dialog"]')]
-        .filter(node => visible(node) && !priorDialogs.has(node) && findProjectNameInput(node));
+      const dialogs = openProjectDialogs().filter(node => !priorDialogs.has(node) && findProjectNameInput(node));
+      if (dialogs.length > 1) throw new Error('PROJECT_CREATE_DIALOG_AMBIGUOUS');
       return dialogs.length === 1 ? dialogs[0] : null;
     }, 3500);
     const input = dialog && findProjectNameInput(dialog);
@@ -838,7 +851,7 @@
     3500);
     if (!createItem) throw new Error('NEW_PROJECT_CONTROL_NOT_FOUND');
     guard.assert(createItem);
-    const priorDialogs = new Set(document.querySelectorAll('[role="dialog"]'));
+    const priorDialogs = new Set(openProjectDialogs());
     createItem.click();
     await fillAndCreateTaskBox(priorDialogs, guard);
     const created = await waitFor(() => taskBoxSidebarContext(), 6000, 100);
@@ -878,7 +891,7 @@
 
   async function openMoveChooser(conversationId) {
     const guard = captureOperationGuard();
-    if ([...document.querySelectorAll('[role="menu"], [role="dialog"]')].some(visible)) throw new Error('UI_BUSY');
+    if (openProjectDialogs().length || [...document.querySelectorAll('[role="menu"]')].some(visible)) throw new Error('UI_BUSY');
     const owner = await waitFor(() => {
       guard.assert();
       if (conversationIdFromLocation() !== conversationId) return null;
@@ -941,7 +954,7 @@
     }
     guard.assert(createItem);
     if (assertTaskBoxSidebarNotAmbiguous().length > 0) throw new Error('TASK_BOX_APPEARED_BEFORE_CREATE');
-    const priorDialogs = new Set(document.querySelectorAll('[role="dialog"]'));
+    const priorDialogs = new Set(openProjectDialogs());
     createItem.click();
     await fillAndCreateTaskBox(priorDialogs, guard);
     const created = await waitFor(() => {
@@ -1354,12 +1367,16 @@
     clearTaskBox,
     clearTaskBoxFromContext,
     deleteTaskBoxProjectFromContext,
+    openProjectDialogs,
+    findProjectNameInput,
+    fillAndCreateTaskBox,
     createTaskBoxFromSidebar
   };
   if (globalThis.__CLF_TASK_BOX_TEST__) globalThis.CLFTaskBoxTestHooks = hooks;
 
   const runtimeHandle = {
     protocol:PROTOCOL,
+    adapterRevision:ADAPTER_REVISION,
     healthy() {
       if (runtimeStopped) return false;
       try { return chrome.runtime?.getManifest?.().version === COMPANION_VERSION; } catch { return false; }
@@ -1391,7 +1408,7 @@
     const incumbent = globalThis.__CLF_TASK_BOX_RUNTIME__;
     if (incumbent && incumbent !== runtimeHandle) {
       let healthy = false;
-      try { healthy = incumbent.protocol >= PROTOCOL && incumbent.healthy?.() === true; } catch {}
+      try { healthy = incumbent.protocol >= PROTOCOL && (incumbent.adapterRevision || 1) >= ADAPTER_REVISION && incumbent.healthy?.() === true; } catch {}
       if (healthy) return {ok:true,enabled:true,alreadyActive:true,protocol:PROTOCOL};
       try { incumbent.stop?.(); } catch {}
     }

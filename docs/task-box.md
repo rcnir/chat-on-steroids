@@ -1,5 +1,39 @@
 # TASK BOX — companion integration
 
+## Native create-dialog repair checkpoint
+
+The first integrated human cleanup reached a completed direct-Clear receipt and
+the browser's Project-delete postcondition, then failed to locate the Project
+name input. The observed create modal is a native `dialog[open]` without an
+explicit `role` attribute. The old `[role="dialog"]` selector omitted it.
+
+Adapter revision 2 recognizes native and ARIA dialogs, excludes closed native
+shells, and snapshots only open dialogs so a pre-mounted shell can be opened.
+Name fields are selected by their associated label/ARIA name or the observed
+`project-name` / `projectName` identity, not by an arbitrary first text field or
+example placeholder. Ambiguous name fields fail before input. An older healthy
+adapter can be replaced by this revision without restarting the extension.
+
+The old code fails the two native-dialog regressions; the repair passes those
+plus the existing ARIA flow and adjacent tests (130 focused tests). Full
+verification records 2,912 passes, 100 skips and the unchanged baseline bundled-rg
+failure. An initial recreate-only diagnostic did not return its page exception,
+so its missing result was not treated as success.
+
+The subsequent user-authorized continuation re-established the same live recovery
+document, exact reserved cleanup ticket and available New Project control. It
+called the production create path once, with page exceptions captured explicitly.
+The result was completed, and the coordinator transitioned that same generation
+from reserved to present without a reset, owner transfer, Clear or deletion.
+The actual new Project page displayed TASK BOX and its native no-chats empty state.
+The acceptance hook was removed and the production adapter re-injected without
+reloading the extension. The original failed cleanup diagnostic remains unchanged.
+
+The final focused run passed 162 tests across the adapter, authenticated bridge,
+coordinator/service, packaging, setup and updater boundaries. Restoring the box
+and verifying live recreation does not retroactively turn the original failed
+one-click cleanup into a pass; a new full live user click remains unverified.
+
 TASK BOX is an optional companion feature. It is off until the extension's
 `task-box-setup.html` page records an explicit cutover acknowledgement. Merely
 installing the app or extension does not enable it or replay an old operation.

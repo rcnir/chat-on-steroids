@@ -287,7 +287,43 @@ describe('companion TASK BOX bridge and lifecycle', () => {
 });
 
 describe('companion TASK BOX page behavior', () => {
-  it('requires a trusted user click and recycles the whole Project, including an ordinary manually-filed chat', async () => {
+  it('recognizes native open dialogs and associated name labels without treating a placeholder or unrelated input as identity', async () => {
+    const h = await makeContent('<dialog id="closed"><input type="text" aria-label="Project name"></dialog><dialog open id="create"><label for="real-name">プロジェクト名</label><input id="unrelated" placeholder="Project name"><input id="real-name" type="text" placeholder="コペンハーゲン旅行"></dialog>', { [FEATURE]: true });
+    expect(h.hooks.openProjectDialogs().map((x: Element) => x.id)).toEqual(['create']);
+    expect(h.hooks.findProjectNameInput(h.document.getElementById('create')).id).toBe('real-name');
+    h.document.getElementById('real-name')!.remove();
+    expect(h.hooks.findProjectNameInput(h.document.getElementById('create'))).toBeNull();
+    closeContent(h);
+  });
+
+  it('refuses ambiguous project-name inputs before writing either input', async () => {
+    const h = await makeContent('<dialog open id="create"><input type="text" aria-label="Project name"><input type="text" aria-label="プロジェクト名"></dialog>', { [FEATURE]: true });
+    expect(() => h.hooks.findProjectNameInput(h.document.getElementById('create'))).toThrow('PROJECT_NAME_INPUT_AMBIGUOUS');
+    expect([...h.document.querySelectorAll('input')].every(x => x.value === '')).toBe(true);
+    closeContent(h);
+  });
+
+  it('replaces an older adapter once without an extension reload and retains the healthy current adapter', async () => {
+    const h = await makeContent('<nav></nav>', { [FEATURE]: true });
+    const old = h.window.__CLF_TASK_BOX_RUNTIME__;
+    old.adapterRevision = 1;
+    let stops = 0;
+    const stop = old.stop;
+    old.stop = () => { stops++; stop(); };
+    h.window.eval(contentSource);
+    await h.window.CLFTaskBox.start();
+    const current = h.window.__CLF_TASK_BOX_RUNTIME__;
+    expect(current).not.toBe(old);
+    expect(current.adapterRevision).toBe(2);
+    expect(stops).toBe(1);
+    h.window.eval(contentSource);
+    await h.window.CLFTaskBox.start();
+    expect(h.window.__CLF_TASK_BOX_RUNTIME__).toBe(current);
+    expect(stops).toBe(1);
+    closeContent(h);
+  });
+
+  it.each(['aria', 'native', 'mounted-native'])('requires a trusted user click and recycles the whole Project, including an ordinary manually-filed chat (%s create dialog)', async (dialogKind) => {
     const bridgeCalls: string[] = [];
     const h = await makeContent(
       `<nav id="sidebar">${taskRow()}<button id="new-project" aria-label="New project" data-cos-test-hidden="true">+</button></nav>
@@ -335,20 +371,27 @@ describe('companion TASK BOX page behavior', () => {
     });
     h.document.getElementById('portal')!.append(menu);
 
+    const mountedCreate = h.document.createElement('dialog');
+    if (dialogKind === 'mounted-native') h.document.getElementById('portal')!.append(mountedCreate);
     h.document.getElementById('new-project')!.addEventListener('click', () => {
-      const dialog = h.document.createElement('div');
-      dialog.setAttribute('role', 'dialog');
+      const dialog = dialogKind === 'mounted-native' ? mountedCreate : h.document.createElement(dialogKind === 'aria' ? 'div' : 'dialog');
+      if (dialogKind === 'aria') dialog.setAttribute('role', 'dialog');
+      else dialog.setAttribute('open', '');
       const input = h.document.createElement('input');
-      input.setAttribute('aria-label', 'Project name');
+      input.type = 'text'; input.id = 'project-name'; input.name = 'projectName';
+      input.placeholder = 'コペンハーゲン旅行';
+      const label = h.document.createElement('label');
+      label.htmlFor = input.id; label.textContent = 'プロジェクト名';
       const save = h.document.createElement('button');
-      save.textContent = 'Save';
+      save.type = 'submit'; save.textContent = 'プロジェクトを作成する'; save.disabled = true;
+      input.addEventListener('input', () => { save.disabled = input.value !== 'TASK BOX'; });
       save.addEventListener('click', () => {
         const shell = h.document.createElement('div');
         shell.innerHTML = taskRow(input.value, 'task-new');
         h.document.getElementById('sidebar')!.insertBefore(shell.firstElementChild!, h.document.getElementById('new-project'));
         dialog.remove();
       });
-      dialog.append(input, save);
+      dialog.append(label, input, save);
       h.document.getElementById('portal')!.append(dialog);
     });
 
