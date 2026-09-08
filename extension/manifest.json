@@ -32,6 +32,7 @@
       "js": [
         "chatgpt-dom.js",
         "content.js",
+        "task-box-compatibility.js",
         "task-box-core.js",
         "task-box.js"
       ],

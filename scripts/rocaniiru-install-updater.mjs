@@ -31,6 +31,11 @@ const statePath = path.join(dataDir, 'state.json');
 const extensionId = 'lcggilneomlkgcaeniefpkadadpfbgfn';
 const patchCommit = '480b425e0e816bc06c1c9fc041292a78523185ac';
 const adoptCurrentPatch = process.argv.includes('--adopt-current-patch');
+const taskBoxAddon = process.argv.includes('--task-box-addon');
+if (process.argv.slice(2).some(arg => !['--adopt-current-patch', '--task-box-addon'].includes(arg))) {
+  throw new Error('Unsupported updater installation argument.');
+}
+if (taskBoxAddon && adoptCurrentPatch) throw new Error('Addon setup cannot adopt the legacy source patch.');
 
 function plistValue(key) {
   return execFileSync('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, path.join(appPath, 'Contents', 'Info.plist')], { encoding: 'utf8' }).trim();
@@ -66,21 +71,35 @@ if (process.platform !== 'darwin') throw new Error('Updater installer is macOS-o
 if (!existsSync(appPath)) throw new Error('Chat On Steroids.app is not installed.');
 if (!validExtension(stableExtension)) throw new Error('Stable Chat On Steroids extension is missing or invalid.');
 if (!existsSync(sourceServer) || !existsSync(sourceUpdater)) throw new Error('Updater source files are missing.');
-
-mkdirSync(dataDir, { recursive: true });
-mkdirSync(launchAgents, { recursive: true });
-cpSync(sourceServer, installedServer);
-cpSync(sourceUpdater, installedUpdater);
-
 const version = plistValue('CFBundleShortVersionString');
 const bundled = path.join(appPath, 'Contents', 'Resources', 'extension');
 const bundledFingerprint = extensionFingerprint(bundled);
 const previousState = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : {};
 const previousConfig = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf8')) : {};
+if (previousState.activationRequired === true) {
+  throw new Error('A runtime candidate is still awaiting activation; preserve it before reinstalling the updater.');
+}
+if (taskBoxAddon) {
+  const catalog = JSON.parse(readFileSync(path.join(repo, 'patcher/task-box/feature.json'), 'utf8'));
+  if (catalog.schema !== 1 || !Object.hasOwn(catalog.releases || {}, version)) {
+    throw new Error(`TASK BOX has no verified adapter for installed ${version}.`);
+  }
+}
 // Initial installation preserves the already-validated current patch. Once an app update is
 // observed, however, a re-install must bootstrap from that new app's own extension rather than
 // blessing the previous version's patched stable tree with the new fingerprint.
 const appChanged = Boolean(previousState.seenBundledFingerprint && previousState.seenBundledFingerprint !== bundledFingerprint);
+// Validate adoption before publishing or changing the installed updater, not afterwards.
+if (adoptCurrentPatch) {
+  if (appChanged) throw new Error('Cannot adopt a same-version patch while the bundled app extension has changed.');
+  if (extensionFingerprint(path.join(repo, 'extension')) !== extensionFingerprint(stableExtension)) {
+    throw new Error('Stable extension does not exactly match validated source; refusing adoption.');
+  }
+}
+mkdirSync(dataDir, { recursive: true });
+mkdirSync(launchAgents, { recursive: true });
+cpSync(sourceServer, installedServer);
+cpSync(sourceUpdater, installedUpdater);
 const temp = mkdtempSync(path.join(os.tmpdir(), 'rocaniiru-updater-install-'));
 try {
   const tree = path.join(temp, 'extension');
@@ -89,16 +108,8 @@ try {
   replaceStable(tree);
 } finally { rmSync(temp, { recursive: true, force: true }); }
 
-if (adoptCurrentPatch) {
-  if (appChanged) throw new Error('Cannot adopt a same-version patch while the bundled app extension has changed.');
-  const sourceFingerprint = extensionFingerprint(path.join(repo, 'extension'));
-  const stableFingerprint = extensionFingerprint(stableExtension);
-  if (sourceFingerprint !== stableFingerprint) {
-    throw new Error('Stable extension does not exactly match the validated local ROCANIIRU source; refusing adoption.');
-  }
-}
-
 writeJson(configPath, {
+  ...previousConfig,
   schema: 1,
   appPath,
   stableExtension,
@@ -106,18 +117,20 @@ writeJson(configPath, {
   repoPath: repo,
   ports: [8768, 8767, 8766],
   extensionOrigin: `chrome-extension://${extensionId}`,
-  defaultPatchCommit: patchCommit,
+  defaultPatchCommit: null,
+  taskBoxAddon: taskBoxAddon || previousConfig.taskBoxAddon === true,
   recipes: previousConfig.recipes ?? {}
 });
 writeJson(statePath, {
+  ...previousState,
   schema: 1,
   seenAppVersion: version,
   seenBundledFingerprint: bundledFingerprint,
-  appliedVersion: adoptCurrentPatch ? version : previousState.appliedVersion ?? version,
-  appliedPatchCommit: adoptCurrentPatch ? patchCommit : previousState.appliedPatchCommit ?? patchCommit,
-  reloadRequired: false,
-  lastError: null,
-  lastAppliedAt: adoptCurrentPatch ? Date.now() : previousState.lastAppliedAt ?? Date.now()
+  appliedVersion: adoptCurrentPatch ? version : previousState.appliedVersion ?? null,
+  appliedPatchCommit: adoptCurrentPatch ? patchCommit : previousState.appliedPatchCommit ?? null,
+  reloadRequired: appChanged || previousState.reloadRequired === true,
+  lastError: previousState.lastError ?? null,
+  lastAppliedAt: adoptCurrentPatch ? Date.now() : previousState.lastAppliedAt ?? null
 });
 
 const node = '/opt/homebrew/bin/node';

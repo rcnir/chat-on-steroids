@@ -2,7 +2,7 @@
   'use strict';
 
   const PROTOCOL = 1;
-  const COMPANION_VERSION = '2.0.6';
+  const COMPANION_VERSION = globalThis.CLFTaskBoxCompatibility?.appVersion;
   const FEATURE_KEY = 'taskBoxIntegrationEnabled';
   const PREFIX = 'clf-task-box:';
   const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -29,6 +29,7 @@
     }
 
     async function enabled() {
+      if (typeof COMPANION_VERSION !== 'string' || globalThis.CLFTaskBoxCompatibility?.protocol !== PROTOCOL) return false;
       let version;
       try { version = chrome.runtime?.getManifest?.().version; } catch { return false; }
       if (version !== COMPANION_VERSION) return false;

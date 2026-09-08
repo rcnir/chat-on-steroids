@@ -1,5 +1,10 @@
 # TASK BOX — companion integration
 
+The current modular update procedure is maintained in
+**[Update-Reference.md](../Update-Reference.md)**. The implementation and acceptance
+checkpoints below describe the original integrated deployment; they do not by
+themselves certify a later modular package or upstream release.
+
 ## Live one-click acceptance — 2026-09-09
 
 The human's subsequent BOX CLEAR on the deployed native-dialog repair

@@ -3496,7 +3496,7 @@ async function restoreTaskBoxTab(id) {
   try {
     const stored = await chrome.storage.local.get('taskBoxIntegrationEnabled');
     if (stored.taskBoxIntegrationEnabled !== true) return;
-    await chrome.scripting.executeScript({target:{tabId:id},files:['task-box-core.js','task-box.js']});
+    await chrome.scripting.executeScript({target:{tabId:id},files:['task-box-compatibility.js','task-box-core.js','task-box.js']});
   } catch {
     // Optional TASK BOX recovery must not declare an otherwise healthy recorder dead.
     // Static injection on the next page load can retry discovery, never a deletion.

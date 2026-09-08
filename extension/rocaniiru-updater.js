@@ -67,6 +67,14 @@
     const note = id('rocaniiruPatchStatus');
     const appVersion = status.appVersion || '?';
     const applied = status.appliedVersion || 'none';
+    if (status.supported === false) {
+      meta.textContent = `App ${appVersion} · TASK BOX compatibility not confirmed`;
+      button.disabled = true;
+      button.textContent = 'Not compatible';
+      note.classList.add('bad');
+      note.textContent = status.compatibilityError || 'This release has no verified adapter. No old patch will be substituted.';
+      return;
+    }
     if (status.activationRequired === true) {
       meta.textContent = `App ${appVersion} · runtime package prepared`;
       button.disabled = true;
@@ -85,7 +93,7 @@
       });
       return;
     }
-    meta.textContent = `App ${appVersion} · patch ${applied}`;
+    meta.textContent = status.featureVersion ? `App ${appVersion} · TASK BOX ${status.featureVersion}` : `App ${appVersion} · patch ${applied}`;
     note.classList.toggle('bad', Boolean(status.error));
 
     if (status.busy) {

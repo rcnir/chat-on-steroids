@@ -14,12 +14,22 @@ it('compares weekly app versions without treating equal versions as updates', ()
   expect(compareVersions('2.0.5', '2.0.6')).toBe(-1);
 });
 
+it('selects the independent addon for both verified releases and never uses the legacy fallback', () => {
+  const config = { taskBoxAddon: true, repoPath: process.cwd(), defaultPatchCommit: '480b425', recipes: { '2.0.6': 'old' } };
+  for (const version of ['2.0.6', '2.0.7']) {
+    expect(patchRecipe(config, version)).toMatchObject({ kind: 'task-box-addon', featureVersion: '1.0.0' });
+  }
+  expect(() => patchRecipe(config, '2.0.8')).toThrow(/UNSUPPORTED_RELEASE/);
+  expect(() => patchRecipe({ defaultPatchCommit: '480b425' }, '2.0.7')).toThrow();
+});
+
 it('supports an explicit runtime recipe and detects a new same-version patch without applying it', () => {
   const config={recipes:{'2.0.6':{commit:'abcdef1234567',kind:'task-box-runtime'}}};
   const info={version:'2.0.6',fingerprint:'base-fingerprint'};
   const state={appliedVersion:'2.0.6',appliedPatchCommit:'1234567',reloadRequired:true};
   expect(patchRecipe(config,'2.0.6')).toEqual({commit:'abcdef1234567',kind:'task-box-runtime'});
-  expect(patchRecipe({defaultPatchCommit:'1234567'},'2.0.6')).toEqual({commit:'1234567',kind:'extension'});
+  expect(()=>patchRecipe({defaultPatchCommit:'1234567'},'2.0.6')).toThrow();
+  expect(patchRecipe({recipes:{'2.0.6':'1234567'}},'2.0.6')).toEqual({commit:'1234567',kind:'extension'});
   expect(()=>patchRecipe({recipes:{'2.0.6':{commit:'abcdef1234567',kind:'run-anything'}}},'2.0.6')).toThrow();
   expect(patchAvailability(config,info,state)).toEqual({updateAvailable:true,activationRequired:false});
   const prepared=preparedRuntimeState(state,info,patchRecipe(config,'2.0.6'),{descriptorPath:'prepared/package.json'});

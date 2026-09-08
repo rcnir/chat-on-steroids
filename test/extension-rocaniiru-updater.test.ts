@@ -47,3 +47,12 @@ it('never reloads or offers apply when a runtime candidate still needs controlle
   expect(fetch).toHaveBeenCalledTimes(1);
   expect((dom!.window as any).chrome.runtime.reload).not.toHaveBeenCalled();
 });
+
+it('does not present an unknown app as up-to-date or reload an incompatible feature', async () => {
+  const { document, fetch } = await openWith({ appVersion: '2.0.8', supported: false,
+    compatibilityError: 'TASK_BOX_UNSUPPORTED_RELEASE', reloadRequired: true, updateAvailable: true });
+  const button = document.getElementById('rocaniiruPatchBtn') as HTMLButtonElement;
+  expect(button.disabled).toBe(true); expect(button.textContent).toBe('Not compatible');
+  button.click(); expect(fetch).toHaveBeenCalledTimes(1);
+  expect((dom!.window as any).chrome.runtime.reload).not.toHaveBeenCalled();
+});

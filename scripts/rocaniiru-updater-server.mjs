@@ -154,7 +154,14 @@ function loadState(config) {
 function saveState(config, state) { jsonWriteAtomic(statePath(config), { ...state, schema: 1 }); }
 
 export function patchRecipe(config, version) {
-  const raw = config.recipes?.[version] ?? config.defaultPatchCommit;
+  if (config.taskBoxAddon === true) {
+    const catalog = jsonRead(path.join(config.repoPath, 'patcher', 'task-box', 'feature.json'));
+    if (catalog?.schema !== 1 || !/^\d+\.\d+\.\d+$/.test(catalog.featureVersion || '') ||
+        !Object.hasOwn(catalog.releases || {}, version)) throw new Error(`TASK_BOX_UNSUPPORTED_RELEASE: ${version}`);
+    return { kind: 'task-box-addon', commit: `task-box-addon@${catalog.featureVersion}`, featureVersion: catalog.featureVersion };
+  }
+  // Never silently fall back to the pre-TASK BOX extension-only patch on a new release.
+  const raw = config.recipes?.[version];
   const recipe = typeof raw === 'string' ? {commit:raw,kind:'extension'} : raw;
   if (!recipe || typeof recipe !== 'object' || Array.isArray(recipe) ||
       typeof recipe.commit !== 'string' || !/^[0-9a-f]{7,40}$/i.test(recipe.commit) ||
@@ -189,6 +196,7 @@ export function adoptedRuntimeState(state, info, descriptor, installedFingerprin
       descriptor.version !== info.version || descriptor.requiresManualActivation !== true ||
       descriptor.candidate?.bundleFingerprint !== installedFingerprint) return null;
   return {...state,appliedVersion:state.preparedVersion,appliedPatchCommit:state.preparedPatchCommit,
+    appliedPackage:state.preparedPackage,
     activationRequired:false,lastAppliedAt:Date.now(),reloadRequired:true,lastError:null};
 }
 
@@ -246,11 +254,18 @@ const job = { busy: false, phase: 'idle', message: '', error: null, targetVersio
 function publicStatus(config, info, state) {
   const comparison = state.appliedVersion ? compareVersions(info.version, state.appliedVersion) : 1;
   const availability = patchAvailability(jsonRead(config.configPath,config),info,state);
+  let compatibilityError = null;
+  let recipe = null;
+  try { recipe = patchRecipe(jsonRead(config.configPath,config), info.version); }
+  catch (error) { compatibilityError = error.message; }
   return {
     ok: true,
     appVersion: info.version,
     appliedVersion: state.appliedVersion,
     ...availability,
+    supported: compatibilityError === null,
+    compatibilityError,
+    featureVersion: recipe?.featureVersion || null,
     busy: job.busy,
     phase: job.phase,
     message: availability.activationRequired ? 'TASK BOX package prepared. A controlled app/companion cutover is required; nothing was restarted.' :
@@ -279,6 +294,31 @@ async function buildAndApply(config, targetVersion) {
   const recipeConfig = jsonRead(config.configPath, config);
   const recipe = patchRecipe(recipeConfig,targetVersion);
   const patchCommit = recipe.commit;
+
+  if (recipe.kind === 'task-box-addon') {
+    job.phase = 'preparing-addon';
+    job.message = 'Checking original release and assembling independent TASK BOX modules…';
+    const modulePath = path.join(config.repoPath, 'patcher', 'task-box', 'package.mjs');
+    const outputRoot = path.join(config.dataDir, 'prepared', `addon-${targetVersion}-${Date.now()}`);
+    const appliedState = loadState(config);
+    await mkdir(path.dirname(outputRoot), { recursive: true });
+    // A fresh packaging process prevents this long-lived updater's module cache from
+    // mixing old adapter functions with new on-disk feature fingerprints. No app is launched.
+    const args = [modulePath, 'prepare', '--app', config.appPath, '--output', outputRoot];
+    if (appliedState.appliedPackage) args.push('--base-descriptor', appliedState.appliedPackage);
+    await runCommand(process.execPath, args, { cwd: config.repoPath,
+      logFile: path.join(config.dataDir, 'addon-prepare.log') });
+    const descriptorPath = path.join(outputRoot, 'task-box-package.json');
+    const prepared = { descriptorPath, descriptor: jsonRead(descriptorPath) };
+    const latestInfo = appInfo(config);
+    if (latestInfo.version !== targetVersion || latestInfo.fingerprint !== startedInfo.fingerprint ||
+        patchRecipe(jsonRead(config.configPath, config), targetVersion).commit !== recipe.commit ||
+        prepared.descriptor.addon?.featureVersion !== recipe.featureVersion) throw new Error('Addon inputs changed during preparation');
+    saveState(config, preparedRuntimeState(loadState(config), latestInfo, recipe, prepared));
+    job.phase = 'prepared';
+    job.message = 'TASK BOX addon prepared. One controlled stopped-app apply is required; no app was restarted.';
+    return;
+  }
 
   const jobsDir = path.join(config.dataDir, 'jobs');
   await mkdir(jobsDir, { recursive: true });

@@ -1,0 +1,164 @@
+# Chat On Steroids CLEAR — Update Reference
+
+更新手順と互換性判断の正本。対象は、公式 Chat On Steroids に TASK BOX 機能を取り付ける **パッチャー管理の独立モジュール版**です。
+
+## 現在地と基本方針
+
+公式アプリのソース一式へ過去の巨大な差分を cherry-pick する方式を、通常の TASK BOX 更新には使用しません。公式配布物の main と companion を検査し、検証済みの小さな接続部分と独立した機能モジュールを組み合わせます。
+
+これは本体の完全無改変ではありません。本体 main には、モジュール読み込み・公式 Clear callback の受け渡し・認証後の専用経路への委譲を追加します。公式 Clear の処理本文は保存完了確認を含め、そのまま使用します。macOS の画面操作、Accessibility、Native Messaging host、Clear ボタンの代行クリックは使用しません。
+
+**分離実装の検証と、稼働中のアプリへの反映は別です。** 2.0.6 で得た旧統合版の実機 PASS を、新しい分離版や 2.0.7 の実機 PASS に流用してはいけません。配布候補の作成はアプリを起動しません。実際の切替・Chrome 拡張再読み込み・必要な実機受け入れは別途記録します。
+
+## バージョンは三つに分ける
+
+| 管理対象 | 正本 | 意味 |
+|---|---|---|
+| 公式アプリ | 公式 release と、その配布物 | 2.0.6、2.0.7 など。companion の公式版・bridge protocol と一致させる |
+| TASK BOX 機能 | `patcher/task-box/feature.json` の `featureVersion` | Project 操作・Clear 連携・不具合修正の版。本体と独立して更新する |
+| 接続契約 | 同ファイルの `protocol`、`adapterRevision`、`releases` | TASK BOX protocol、DOM adapter、検証済みの本体・companion の組み合わせ |
+
+現行カタログの対象は **macOS / Apple silicon、2.0.6 と 2.0.7**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.0`、TASK BOX protocol は `1`、作成ダイアログ修正は adapter revision `2` です。
+
+## ソースの配置
+
+```text
+patcher/task-box/
+  feature.json                  機能版・公式 artifact / main / companion の照合値
+  main-adapter.mjs               公式 main への小さな接続。元の全バイトへ戻せることを検査
+  extension-adapter.mjs          公式 companion の認証・document owner 境界を使う接続
+  build-feature.mjs              独立機能の生成。公式アプリ全体をビルドしない
+  package.mjs                    check / prepare / apply
+  loader.cjs                    公式 Clear callback と既存 receipt 保存先の接続
+  runtime/clear-service.ts       二重 Clear 防止・永続 receipt の唯一の実装
+  runtime/index.cjs              認証済み経路から呼ばれる TASK BOX 専用 handler
+  extension/                    TASK BOX のブラウザ側正本
+```
+
+`extension/task-box*.js` と `extension/task-box-setup.html` は開発・既存回帰テスト用の生成物です。直接編集せず、`npm run feature:sync` で再生成します。旧開発統合の `src/main/task-box-clear.ts` は正本モジュールへの再exportに留めます。実際の新版配布は、公式 release にパッチャーが組み合わせた候補から行います。
+
+**native dialog 修正を含む最新の機能ソースを毎回同じ場所から配布します。** 古い `11c0788` レシピなどへ戻して修正を失わないこと。無関係な過去の helper / model-picker 修正を、新版へまとめて持ち込まないこと。
+
+## 通常の更新手順
+
+### 1. 準備
+
+BOX CLEAR、Project 作成・移動、他のアプリ実行が進行中なら更新しません。`reserved` / `deleting` / 成否不明の記録がある場合は、解除せず先に確認します。旧 standalone CLEAR は無効のままにします。
+
+公式 release の対象アーキテクチャの ZIP と SHA-256 を確認します。ダウンロードしたアプリは、まず別の作業フォルダへ展開します。検証前に稼働中の `/Applications` を置換しません。
+
+```sh
+npm run patcher:check -- --app "/path/to/verified/Chat On Steroids.app"
+```
+
+このコマンドは読み取り専用です。公式 main の完全一致、companion の完全一致、版・接続構造を検査します。成功は「候補を組み立てられる」の意味であり、実機動作成功ではありません。
+
+### 2. 機能を組み立てる
+
+```sh
+npm run patcher:prepare -- \
+  --app "/path/to/verified/Chat On Steroids.app" \
+  --output "/path/to/new-candidate-directory"
+```
+
+出力先は新規ディレクトリを指定します。既存出力やアプリ内部、`/Applications` への prepare は拒否します。出力は次のとおりです。
+
+```text
+Chat On Steroids.app       署名・ASAR整合性を検査した候補コピー
+task-box-package.json     本体基準・機能・候補のhashと、未実機検証の区別
+feature/                  独立して生成した機能ペイロード
+composed-main.js           公式 main に接続部分だけを追加した内容
+```
+
+公式アプリの main 以外の ASAR 内容、native module、署名sidecar等を、無関係なソースビルドで置き換えません。app.asar.unpacked は既存の保存ロジックを使用し、生成した部分木で丸ごと置換しません。候補だけを ad-hoc seal / verify します。これは配布元の公的な署名・notarizationを意味しません。
+
+独立版は、照合済み公式 main と companion の元データを、候補内の `Resources/rocaniiru-task-box/original/` に保存します。次回の同一本体版での機能更新も、この元データから再構成します。そこにユーザー情報や秘密情報は保存しません。旧統合版のようにこの元データを持たない改造本体からは推測して作らず、公式配布物を使用します。
+
+公式入力は main・companion だけでなく **本体全体の fingerprint** も対応表と照合します。既に独立版を適用した本体からの同一版更新では、前回の `task-box-package.json` を `--base-descriptor` に指定します。前回の完成候補と現在の本体が全体一致しなければ拒否します。updater は採用済みdescriptorを保持して、この照合に使用します。候補にはパッケージ生成コードと固定依存関係を含む入力fingerprintも記録し、生成処理が変わった後の古い候補をそのまま適用しません。
+
+### 3. 制御された一回の反映
+
+候補確認後に、本体の終了・入替・起動を明示的に行います。ユーザーの許可なしに自動再起動しません。`apply` 自体は終了・起動を行わず、本体が稼働中なら拒否します。
+
+```sh
+npm run patcher:apply -- \
+  --app "/Applications/Chat On Steroids.app" \
+  --candidate "/path/to/new-candidate-directory/Chat On Steroids.app" \
+  --descriptor "/path/to/new-candidate-directory/task-box-package.json" \
+  --old-clear-disabled
+```
+
+インストール先の基準 fingerprint が descriptor と一致している必要があります。2.0.7公式版から作った候補を、2.0.6の本体へ強引に apply しないでください。まず対応する公式版へ切り替えるか、その手順を含む明示的な切替計画を使います。
+
+apply は退避本体を `.Chat On Steroids.task-box-old-<基準hashの先頭12文字>.app` に残します。別週の更新が同じ退避先を上書きしないための名前です。既にその退避先があれば拒否し、勝手に削除しません。
+
+### 4. companion を確認する
+
+本体起動後、companion の配布元・機能metadataを確認してから、Chrome の拡張を一度だけ再読み込みします。必要なChatGPTページも読み込み直し、**ファイルの一致だけでなく、そのページで実行中の adapter を確認**します。以前、この確認不足が再作成失敗の再発につながりました。
+
+既存の機能有効化設定、TASK BOX generation、Clear receipts は維持します。更新のたびに setup を押して pending 状態を隠す、保存領域を空にする、Clear を自動実行する、といった処理は禁止です。
+
+## パッチャーの更新ボタン
+
+既存 updater を独立モジュール方式で構成する場合は、設定の `taskBoxAddon: true` を使用します。レシピは `feature.json` を参照して選択されます。本体の更新のたびに大量の Git 差分を再作成するものではありません。
+
+```sh
+node scripts/rocaniiru-install-updater.mjs --task-box-addon
+```
+
+この installer は実際の updater 配置・設定・既存daemonを変更します。**ソース検証コマンドではないので、稼働環境への切替時にのみ実行**します。`--adopt-current-patch` とは併用しません。未完了のruntime反映があるときは拒否します。
+
+「Update patch」は対応検査と候補作成までを行い、「Activation required」で止まります。未知版や不一致なら「Not compatible」で止まります。準備した候補と実際の本体が完全一致した後だけ、companion配布を許可します。終了・入替・起動の権限を、通常のstatusポーリングに持たせません。
+
+古い `defaultPatchCommit` への暗黙フォールバックは廃止しています。対応表にない新版を、TASK BOX統合前のextension-onlyパッチで代用してはいけません。
+
+## 新しい公式版を対応表に追加するとき
+
+1. 公式release/tag/対象ZIP/checksumを取得し、別フォルダで照合する。
+2. main の接続箇所、公式Clearの保存完了条件、認証済みbridge、companionのdocument owner契約を比較する。
+3. 契約が同じなら、同一機能モジュールで検証する。差分があれば接続部分だけ修正し、機能へ旧本体全体を取り込まない。
+4. `feature.json` に検証した artifact / main / companion の照合値を登録する。単に版の文字列だけを書き換えない。
+5. 下記検証を実行し、対応表・機能版・本稿を同じ変更で更新する。
+
+将来版に無条件で対応する約束ではありません。互換性が不明なら追加機能を止め、公式アプリそのものの利用を妨げない設計です。
+
+## 検証コマンドと判定
+
+```sh
+npm run feature:sync
+npm run typecheck
+npx vitest run test/task-box-*.test.ts test/rocaniiru-updater.test.ts test/extension-rocaniiru-updater.test.ts
+npm run verify
+git diff --check
+```
+
+配布済み公式アプリの実際のcompiled handlerを使用する、非GUIの追加検証:
+
+```sh
+COS_TASK_BOX_RELEASE_TEST_ROOT="/path/to/verified-upstream" \
+  npx vitest run test/task-box-modular.test.ts
+```
+
+対象フォルダ形式は `<root>/2.0.6/unpacked/Chat On Steroids.app`、`<root>/2.0.7/unpacked/Chat On Steroids.app`。このテストは公式handlerの認証境界とClear callbackを、隔離された保存先・依存関数で実行します。Electron本体や稼働中アプリは起動しません。
+
+必須の負例: 未知版／main不一致／認証失敗／古いdocument／重複request／応答喪失／保存失敗／壊れたreceipt／古いpending状態／機能無効化後の削除／曖昧なProject・入力欄。既存のnative dialogと空のTASK BOX再作成の回帰も維持します。
+
+テスト、署名確認、候補生成、実機受け入れを混同しません。既知の環境テスト失敗を除外・緩和して全成功と報告しません。機能変更・反映が必要ない更新に、ユーザーデータ削除を何度も要求する実機テストを加えません。
+
+## 問題が起きたとき
+
+BOX CLEARの再クリック、Clearの再送、別のProject削除をしません。最新の `lastBoxClearOperation` と同じ要求IDの app receipt、`taskBoxCreationGlobal` を確認します。完了が不明な操作は、更新で解除しません。
+
+本体と拡張が不一致なら TASK BOX を使用せず、検証済みの本体・companion の組み合わせへ戻します。退避本体の復元も本体停止下の明示作業です。状態ファイルやChrome storageを過去のバックアップで巻き戻すと二重実行防止を失うため、ペイロードの切り戻しと状態の保持を分けます。
+
+過去の実機検証経緯は [`docs/task-box.md`](docs/task-box.md) を参照してください。本稿は、その履歴を成功で上書きするものではありません。
+
+## 分離版の検証記録 — 2026-09-09
+
+2.0.6／2.0.7の公式macOS arm64 ZIPを取得してSHA-256を照合し、同じ接続コードで候補を構成しました。公式 main への追加は両方とも673バイトです。追加部分を取り除くと、元のmain全体とバイト単位で一致します。Clear callback本文は変更していません。
+
+両版の候補コピーで署名・ASAR整合性・入力の保持を確認しました。2.0.7の分離版候補を基準descriptor付きで再構成し、本体版を変えない機能更新も確認しました。基準descriptorなしの既存addonや、本体のmain／companion以外を改変した入力も拒否されます。
+
+公式配布物のcompiled handlerを含む関連12ファイルは **197/197成功**。型チェックも成功しています。全体の `npm run verify` は **2,944成功・103スキップ・1失敗**で、失敗は以前から記録されているbundled ripgrepのPATH選択テストです。103スキップには通常CIでは配布物の保存先を渡さない3件のrelease-matrixテストが含まれ、それらは上記197件の実行で別途成功しています。独立実行した終了処理のテストは **2/2成功**です。
+
+この検証では稼働中の本体、stable companion、updater設定を更新していません。新しい2.0.7本体を起動した実機受け入れ、Chromeでの分離版有効化、分離版での実際のBOX CLEARは未実施です。候補の `liveAcceptance` は `false` のままです。

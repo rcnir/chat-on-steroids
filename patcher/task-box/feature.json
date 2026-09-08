@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "name": "Chat On Steroids CLEAR",
+  "featureVersion": "1.0.0",
+  "protocol": 1,
+  "adapterRevision": 2,
+  "releases": {
+    "2.0.6": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "bridgeProtocol": 12,
+      "tagCommit": "b0b0c010f3410a334b0f34192dd64fee90fd8d55",
+      "archiveSha256": "e328d99522a39dd925f85c29634c403bffcdc1d64396bf7659768a719eefeb7f",
+      "mainSha256": "56a5aea89eb8edc9cdf4c763e92150b3df25e08f4298b68fa41845934e1aacf2",
+      "bundleFingerprint": "bc03a1b65061fdb74743c1021c8c0393809e54110c3c075ba3025a5085f614e9",
+      "extensionFingerprint": "7ce82313215c4972dffcd7b94942394377221b9519954321723a1aaea73b7450"
+    },
+    "2.0.7": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "bridgeProtocol": 13,
+      "tagCommit": "3d9cd2f9897a41e400cff79f792836153f58a765",
+      "archiveSha256": "782c84784139d35c06cfeec9cc2fa5aeda3e8cdc8045761dc6df9709774bc541",
+      "mainSha256": "df1fe71f80d5a1b98f754950e9075b7c7c217c301305476ae9079e77ea7bfe44",
+      "bundleFingerprint": "99605c2155baeb54eb7bf7f8d36ed4e5958476e78f91e459395d74dce86765c3",
+      "extensionFingerprint": "7b1f54b1575867470466fa233815af91275b9c094c20af39fb36a2594d65326a"
+    }
+  }
+}

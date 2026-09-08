@@ -5,7 +5,7 @@
   if (!C) return;
   const PROTOCOL = 1;
   const ADAPTER_REVISION = 2;
-  const COMPANION_VERSION = '2.0.6';
+  const COMPANION_VERSION = globalThis.CLFTaskBoxCompatibility?.appVersion;
   const FEATURE_KEY = 'taskBoxIntegrationEnabled';
 
   const MOVE_LABELS = ['プロジェクトに移動する', 'プロジェクトに移動', 'Move to project'];
@@ -81,6 +81,9 @@
   function ensureExtensionRuntime() {
     if (runtimeStopped) return false;
     try {
+      if (typeof COMPANION_VERSION !== 'string' || globalThis.CLFTaskBoxCompatibility?.protocol !== PROTOCOL) {
+        retireExtensionRuntime(); return false;
+      }
       if (!chrome.runtime?.id || typeof chrome.runtime.getManifest !== 'function') {
         retireExtensionRuntime(); return false;
       }

@@ -42,3 +42,7 @@ docs/open-issues-*.md
 one-cycle.ps1
 .one-cycle-*
 proof-*.txt
+
+# Generated development copies; patcher/task-box/ is the only feature source.
+/extension/task-box*.js
+/extension/task-box-setup.html

@@ -539,8 +539,10 @@ export function applyCandidate(options) {
   verifyCandidateSignature(candidate);
 
   const parent = path.dirname(installedAppPath);
-  const staged = path.join(parent, '.Chat On Steroids.task-box-new.app');
-  const rollback = path.join(parent, '.Chat On Steroids.task-box-old.app');
+  if (options.slot !== undefined && !/^[a-f0-9]{12}$/.test(options.slot)) throw new Error('Invalid TASK BOX apply slot.');
+  const suffix = options.slot ? `-${options.slot}` : '';
+  const staged = path.join(parent, `.Chat On Steroids.task-box-new${suffix}.app`);
+  const rollback = path.join(parent, `.Chat On Steroids.task-box-old${suffix}.app`);
   if (existsSync(staged) || existsSync(rollback)) throw new Error('TASK BOX apply staging/rollback path already exists; resolve it manually.');
   run('/usr/bin/ditto', [candidate, staged]);
   assertExpectedBaselineFingerprint(fingerprintTree(staged), descriptor.candidate.bundleFingerprint);

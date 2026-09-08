@@ -38,6 +38,10 @@ Screenshots of the app with private conversation and folder details redacted. Ch
 
 ## Why this exists
 
+For the optional ROCANIIRU TASK BOX addon, see **[Update-Reference.md](Update-Reference.md)**.
+It documents the patcher-owned modules, verified release compatibility, controlled installation,
+and rollback. This addon is separate from the upstream application's normal release process.
+
 ChatGPT is a good engineer trapped in a text box. Developer mode lets it call MCP servers, but most servers give it one narrow API. This one gives it a workbench.
 
 - **Codex-grade tools.** `apply_patch`, `exec_command` and `write_stdin` are ports of the tool contracts OpenAI's Codex CLI uses, so the model already knows how to hold them. Multi-file patches are preflighted before anything is written. Commands run as real processes with interactive stdin, output budgets and background results it can collect later.

@@ -80,7 +80,7 @@ describe('authenticated direct TASK BOX Clear (no GUI/native host)',()=>{
       set:async(values:Record<string,any>)=>{Object.assign(data,structuredClone(values));}};
     const wire:string[]=[];
     const context:any={URL,URLSearchParams,console};
-    for(const file of ['task-box-coordinator.js','task-box-background.js']){
+    for(const file of ['task-box-compatibility.js','task-box-coordinator.js','task-box-background.js']){
       vm.runInNewContext(await fs.readFile(path.join(process.cwd(),'extension',file),'utf8'),context);
     }
     const api=context.CLFTaskBoxBackground.registerTaskBox({chrome:{storage:{local},runtime:{getManifest:()=>({version:APP_VERSION})}},
@@ -96,7 +96,7 @@ describe('authenticated direct TASK BOX Clear (no GUI/native host)',()=>{
     const win:any=dom.window;win.__CLF_TASK_BOX_TEST__=true;
     win.chrome={storage:{local,onChanged:{addListener:()=>{},removeListener:()=>{}}},runtime:{id:'test',getManifest:()=>({version:APP_VERSION}),
       sendMessage:(message:any)=>api.handle(message,{tab:{id:owner.tabId},documentId:owner.documentId,frameId:0,url:win.location.href},()=>true)}};
-    for(const file of ['task-box-core.js','task-box.js']) win.eval(await fs.readFile(path.join(process.cwd(),'extension',file),'utf8'));
+    for(const file of ['task-box-compatibility.js','task-box-core.js','task-box.js']) win.eval(await fs.readFile(path.join(process.cwd(),'extension',file),'utf8'));
     let deletes=0,saves=0;
     try {
       expect((await win.CLFTaskBox.start()).enabled).toBe(true);

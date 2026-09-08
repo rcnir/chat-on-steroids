@@ -5,6 +5,7 @@ import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
 
 const extension = path.join(process.cwd(), 'extension');
+const compatibilitySource = readFileSync(path.join(extension, 'task-box-compatibility.js'), 'utf8');
 const coreSource = readFileSync(path.join(extension, 'task-box-core.js'), 'utf8');
 const coordinatorSource = readFileSync(path.join(extension, 'task-box-coordinator.js'), 'utf8');
 const backgroundSource = readFileSync(path.join(extension, 'task-box-background.js'), 'utf8');
@@ -79,6 +80,7 @@ function makeBackground(seed: Record<string, unknown> = {}, bridge?: (...args: a
     runtime: { getManifest: () => ({ version: '2.0.6' }) }
   };
   const box: any = { URL, URLSearchParams, structuredClone, console };
+  vm.runInNewContext(compatibilitySource, box);
   vm.runInNewContext(coordinatorSource, box);
   vm.runInNewContext(backgroundSource, box);
   const registered = box.CLFTaskBoxBackground.registerTaskBox({ chrome, call });
@@ -128,6 +130,7 @@ async function makeContent(
     runtime
   };
   window.eval(coreSource);
+  window.eval(compatibilitySource);
   window.eval(contentSource);
   const started = await (window as any).CLFTaskBox.start();
   return {
@@ -200,6 +203,7 @@ describe('companion TASK BOX bridge and lifecycle', () => {
     const calls: string[] = [];
     const chrome = { storage: { local: storage.local }, runtime: { getManifest: () => ({ version: '2.0.6' }) } };
     const box: any = { URL, URLSearchParams, structuredClone, console };
+    vm.runInNewContext(compatibilitySource, box);
     vm.runInNewContext(coordinatorSource, box);
     vm.runInNewContext(backgroundSource, box);
     const api = box.CLFTaskBoxBackground.registerTaskBox({
@@ -220,6 +224,7 @@ describe('companion TASK BOX bridge and lifecycle', () => {
     const storage = makeChromeStorage({ [FEATURE]: true, [GLOBAL]: { state: 'present', generation: 0 } });
     const chrome = { storage: { local: storage.local }, runtime: { getManifest: () => ({ version: '2.0.6' }) } };
     const box: any = { URL, URLSearchParams, structuredClone, console };
+    vm.runInNewContext(compatibilitySource, box);
     vm.runInNewContext(coordinatorSource, box);
     vm.runInNewContext(backgroundSource, box);
     const api = box.CLFTaskBoxBackground.registerTaskBox({
@@ -245,6 +250,7 @@ describe('companion TASK BOX bridge and lifecycle', () => {
   it('refuses destructive dispatch when the shared document guard turns stale after capability await', async () => {
     let current = true;
     const box: any = { URL, URLSearchParams, structuredClone, console };
+    vm.runInNewContext(compatibilitySource, box);
     const storage = makeChromeStorage({ [FEATURE]: true, [GLOBAL]: { state: 'present', generation: 0 } });
     vm.runInNewContext(coordinatorSource, box);
     vm.runInNewContext(backgroundSource, box);
