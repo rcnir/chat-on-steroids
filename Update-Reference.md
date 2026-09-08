@@ -114,6 +114,8 @@ node scripts/rocaniiru-install-updater.mjs --task-box-addon
 
 ## 新しい公式版を対応表に追加するとき
 
+**Upstream Absorption Review：TASK BOX側と同等の機能が公式へ入った場合は、独自実装を維持する理由を先に再評価し、不要なら削除します。** 公式が担当するworker・復旧・document ownership等を二重実装しません。
+
 1. 公式release/tag/対象ZIP/checksumを取得し、別フォルダで照合する。
 2. main の接続箇所、公式Clearの保存完了条件、認証済みbridge、companionのdocument owner契約を比較する。
 3. 契約が同じなら、同一機能モジュールで検証する。差分があれば接続部分だけ修正し、機能へ旧本体全体を取り込まない。
@@ -162,3 +164,19 @@ BOX CLEARの再クリック、Clearの再送、別のProject削除をしませ�
 公式配布物のcompiled handlerを含む関連12ファイルは **197/197成功**。型チェックも成功しています。全体の `npm run verify` は **2,944成功・103スキップ・1失敗**で、失敗は以前から記録されているbundled ripgrepのPATH選択テストです。103スキップには通常CIでは配布物の保存先を渡さない3件のrelease-matrixテストが含まれ、それらは上記197件の実行で別途成功しています。独立実行した終了処理のテストは **2/2成功**です。
 
 この検証では稼働中の本体、stable companion、updater設定を更新していません。新しい2.0.7本体を起動した実機受け入れ、Chromeでの分離版有効化、分離版での実際のBOX CLEARは未実施です。候補の `liveAcceptance` は `false` のままです。
+
+## 本番切替記録 — 2.0.7 / 2026-09-09
+
+上記の候補検証後、ユーザー承認を受けて `0717151` の分離版を本番へ反映しました。本体とcompanionは `2.0.7`、TASK BOX機能は `1.0.0`、bridge protocolは `13`、TASK BOX protocolは `1`、adapter revisionは `2` です。開発用repoの本体バージョンをそのまま配布したのではなく、照合済みの公式2.0.7を入力にした候補を使用しています。
+
+初回の2.0.6→2.0.7切替は、旧updaterを一時停止し、稼働本体を通常終了、旧本体を固有名で退避、停止した公式2.0.7を配置、既存の `applyAddon` で同版の検証済み候補を反映、全体照合後に起動、の順で実施しました。未改変の2.0.7を途中で起動せず、切替runnerが要求した本体の終了と起動は各1回です。旧本体・旧companion・旧updater設定の退避を保持し、状態ファイルの巻き戻しはしていません。
+
+updaterは `taskBoxAddon: true`、暗黙の `defaultPatchCommit` は `null` に切り替えました。実際に配置された候補の全体fingerprintが一致してからcompanionを公開し、採用済みdescriptorをupdaterの永続的なprepared領域へ保存しています。Chrome本体は再起動せず、companionだけを1回再読み込みしました。
+
+新しく開いた既存TASK BOXのProject画面で、実行中の2.0.7／機能1.0.0／protocol 13／adapter revision 2、正常なruntime、1件のTASK BOXとreadyのBOX CLEARを確認しました。fresh workerの自動移動は `moveCompleted: true`、同じ会話のProject内カード、移動後の応答 `TASK_BOX_207_ALIVE` まで確認済みです。Project画面のスクリーンショットも照合しました。
+
+更新前から開かれていた実装チャットと旧Projectタブのスクリプト観測はタイムアウトし、それらのページ内コードまで更新済みとは確認していません。進行中のチャットを強制再読み込みせず、新規Projectビューで検証しました。古いタブは使用前に一度再読み込みし、新規ビューで得た実行版確認と混同しないこと。
+
+切替runnerは終了済みで再実行されていませんが、その後の02:45頃（日本時間）に別の終了・起動が1回アプリログに記録されています。起点は特定していません。後続の実機検証時も、本体全体は検証済み2.0.7候補と一致しています。
+
+切替前後でClear receiptファイルのhashは一致し、既存3件の完了記録とgeneration 3 / presentを保持しています。この切替ではClear・Project削除・Project再作成を実行していません。**2.0.7分離版の本番切替と自動移動は確認済みですが、同版での破壊的なBOX CLEAR通し実機テストは未実施です。** 2.0.6の実機結果と197件の隔離テストを、その代わりの新しい実機PASSとして扱いません。候補作成時のdescriptorも、後日の実機結果で書き換えません。
