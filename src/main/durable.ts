@@ -59,6 +59,21 @@ export async function readDurable<T>(name: string): Promise<T | null> {
   }
 }
 
+/** Destructive-operation receipts must distinguish an absent file from corrupt/unreadable state. */
+export async function readDurableStrict<T>(name: string): Promise<T | null> {
+  if (!root) throw new Error('durable_store_not_ready');
+  try {
+    const value: unknown = JSON.parse(await fs.readFile(fileFor(name), 'utf8'));
+    // The writer represents null by removing the file. A literal null file is not
+    // an absent receipt ledger and must not silently erase an at-most-once fence.
+    if (value === null) throw new Error('durable_state_invalid');
+    return value as T;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 function nextWrite(value: unknown): PendingWrite {
   return { generation: nextGeneration++, value };
 }

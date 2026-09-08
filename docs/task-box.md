@@ -1,0 +1,143 @@
+# TASK BOX — companion integration
+
+TASK BOX is an optional companion feature. It is off until the extension's
+`task-box-setup.html` page records an explicit cutover acknowledgement. Merely
+installing the app or extension does not enable it or replay an old operation.
+
+## User behavior
+
+Fresh recognized worker chats are filed into the exact Project named `TASK BOX`.
+Ordinary chats may also be filed there manually. The sidebar BOX CLEAR control
+clears the official app swarm, deletes that entire Project, and creates an empty
+TASK BOX. It is permanent deletion, not a recoverable trash folder. Two matching
+Projects stop the operation rather than choosing one. Project IDs are never the
+durable logical identity.
+
+## Direct Clear, not macOS screen automation
+
+The companion uses its existing authenticated loopback connection. It adds no
+native messaging host, Accessibility permission, extra server, external-extension
+control API, or app activation/restart loop.
+
+* `GET /task-box/capabilities` advertises protocol 1.
+* `POST /task-box/clear` carries an exact browser document owner and UUID request.
+* `GET /task-box/clear/status` reads the outcome for that same request and owner.
+
+The ordinary app button and the bridge both call `clearSwarmDurably()`, which
+invokes the existing `resetSwarm()` and `persistAgentAuthorityNow()`. The bridge
+service writes intent before calling that function and records completion only
+after it resolves. It never reimplements the worker lifecycle.
+
+A repeated request cannot Clear a subsequent run. A lost response leads to a
+status read, not another POST. After an app crash, a pending intent remains
+incomplete: there is no assertion of exactly-once completion across an unknowable
+crash boundary. Receipts are not expired. Corrupt or unreadable storage, including
+a literal null receipt file, is not treated as an absent ledger.
+
+The content adapter still depends on ChatGPT's current Project DOM for move,
+delete, and recreate. Removing macOS UI automation does not remove that dependency.
+The adapter captures exact nodes, revalidates after awaits, and stops on uncertain
+outcomes. A missing row alone is not a successful delete. Local DOM fixtures are
+not evidence of live ChatGPT success.
+
+## Authority and disable behavior
+
+TASK BOX messages use the companion's existing per-tab serialization and browser
+document registry. The module receives a current-document check and repeats it
+after asynchronous discovery and before Clear dispatch. The origin, bearer,
+protocol, method, and request schema are checked by the app bridge.
+
+The global creation coordinator is shared by worker creation and cleanup
+recreation. Confirmed deletion transitions directly to a reserved cleanup
+creation, without an open interval. Before both the Project delete item and final
+Confirm, a read-only authorization checks the enabled flag and exact completed
+Clear ticket. The captured document/dialog/button are revalidated immediately
+after that grant. Revocation is ordered at this preflight; it cannot retroactively
+cancel a native action already authorized and sent.
+
+The setup page is extension-origin only. It cannot release a pending lifecycle.
+Its old-extension-disabled checkbox is a human acknowledgement, not a claim that
+the extension has permission to inspect or disable another extension.
+
+## Preparation and controlled activation
+
+The updater accepts the existing string recipe (extension-only) or an explicit
+runtime recipe:
+
+```json
+{"recipes":{"2.0.6":{"commit":"<validated recipe commit>","kind":"task-box-runtime"}}}
+```
+
+A runtime recipe builds and prepares a signed candidate copy; it does **not**
+publish half of a protocol change, reload the browser, quit an app, or start one.
+The updater reports `activationRequired`, distinct from applied/reload-required.
+An unknown app version or mismatched baseline is refused.
+
+Standalone preparation is import-safe and requires an explicit baseline:
+
+```sh
+npm run build
+node scripts/rocaniiru-task-box-package.mjs --prepare \
+  --expected-baseline "<verified full installed-app fingerprint>" \
+  --output-root "<new package directory>"
+```
+
+The package copies the installed Electron/native payload, changes the built main
+entry and companion, preserves supported ASAR metadata, updates ASAR integrity,
+and signs/verifies only the candidate. No GUI smoke is run. Its descriptor
+captures baseline/source/candidate fingerprints. Source or installed-app changes
+during preparation invalidate the candidate.
+
+Activation requires the old standalone CLEAR extension disabled, any uncertain
+legacy operation preserved and reviewed, and the installed app manually stopped.
+The explicit apply command refuses a running app and keeps a rollback bundle:
+
+```sh
+node scripts/rocaniiru-task-box-package.mjs --apply \
+  --candidate "<package directory>/Chat On Steroids.app" \
+  --descriptor "<package directory>/task-box-package.json" \
+  --old-clear-disabled
+```
+
+`--old-clear-disabled` is an operator attestation. Applying does not start the app,
+change Chrome settings, clear the old extension's storage, or enable TASK BOX.
+Start the app manually, load/reload its published companion, then use the
+companion's extension options page for the explicit feature cutover. Reload the
+intended ChatGPT Project page once afterward; do not assume old content scripts
+have disappeared just because an extension was updated.
+
+Preserving an uncertain legacy request is not declaring it completed. The new
+feature must never silently continue that request. Any later BOX CLEAR is a new
+human action after the cutover, not an automatic recovery attempt.
+
+## Verification boundaries
+
+Focused tests execute shipped companion scripts, the actual authenticated HTTP
+bridge on an ephemeral test port, the official in-process reset/durability path,
+and deterministic Project fixtures. The full-chain test deliberately loses the
+Clear POST reply and finishes through a same-request status read with one Clear,
+one Project delete, and one empty recreation, including a manually-filed ordinary
+chat. This remains an isolated integration test, not a live browser E2E.
+
+Live acceptance still requires a fresh-worker move and the human's final BOX
+CLEAR against the deployed build. Package preparation, unit tests, and an enabled
+button are not substitutes for that acceptance.
+
+### Candidate checkpoint
+
+The initial integrated candidate passed the TASK BOX/companion/updater focused
+checks, type checking, production build, and package signature/integrity checks.
+Its real installed-app copy was prepared without starting or replacing the app.
+Independent reviews closed the retired-document, feature-revocation, and
+unadopted-runtime publication findings.
+
+The full verification run recorded 2,907 passing tests, 100 skipped tests and one
+failure: the existing MCP environment test resolved Homebrew ripgrep rather than
+the bundled binary. The same failure was independently reproduced from the clean
+pre-change commit `8ce1425`; it was not suppressed or changed to make this
+candidate green. The separately executed shutdown suite passed 2/2. The overall
+`npm run verify` therefore still exits nonzero for that baseline failure.
+
+This checkpoint does not claim live activation, live worker movement, or live
+Project deletion/recreation for the integrated build. The separate legacy
+extension's uncertain operation was left unchanged.

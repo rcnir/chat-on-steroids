@@ -3017,7 +3017,60 @@ const HANDLERS = {
   }
 };
 
+const taskBox = globalThis.CLFTaskBoxBackground?.registerTaskBox({chrome,call}) || null;
+
+let taskBoxSetupQueue = Promise.resolve();
+async function taskBoxSetup(message,sender) {
+  // This entry is extension-origin setup only, never a content-script rearm API.
+  if (!taskBox || sender?.id !== chrome.runtime.id || sender?.url !== chrome.runtime.getURL('task-box-setup.html') ||
+      (sender.frameId !== undefined && sender.frameId !== 0)) return {ok:false,error:'invalid_setup_owner'};
+  const state=await chrome.storage.local.get(['taskBoxIntegrationEnabled','taskBoxCreationGlobal','taskBoxCutoverReceipt']);
+  const lifecycle=state.taskBoxCreationGlobal;
+  if (lifecycle !== undefined && !['open','present'].includes(lifecycle?.state)) return {ok:false,error:'TASK_BOX_LIFECYCLE_BLOCKED'};
+  const capability=await call('/task-box/capabilities');
+  const available=capability?.ok === true && capability.data?.protocol === 1 && capability.data.supported === true &&
+    capability.data.atMostOnce === true && capability.data.durableReceipts === true;
+  if (message.type === 'clf-task-box-setup:status') {
+    return {ok:true,available,enabled:state.taskBoxIntegrationEnabled === true,
+      error:available ? null : '対応するアプリの直接Clear接続が未反映です。'};
+  }
+  if (message.type !== 'clf-task-box-setup:enable' || !available || message.oldExtensionDisabled !== true || message.previousOutcomeReviewed !== true) {
+    return {ok:false,error:'TASK_BOX_CUTOVER_CONFIRMATION_REQUIRED'};
+  }
+  if (state.taskBoxIntegrationEnabled === true) return {ok:true,enabled:true};
+  // No lifecycle writes or legacy reset: only explicit configuration and acknowledgement.
+  // Reread after capability await so setup cannot conceal a newly pending operation.
+  const latest=await chrome.storage.local.get('taskBoxCreationGlobal');
+  if (JSON.stringify(latest.taskBoxCreationGlobal) !== JSON.stringify(lifecycle)) return {ok:false,error:'TASK_BOX_STATE_CHANGED'};
+  await chrome.storage.local.set({taskBoxIntegrationEnabled:true,taskBoxCutoverReceipt:{
+    protocol:1,acknowledgedAt:new Date().toISOString(),oldExtensionDisabled:'human-attested',
+    previousOutcomeReviewed:true,legacyOperationReplayed:false,legacyOperationDeclaredComplete:false
+  }});
+  return {ok:true,enabled:true};
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (typeof message?.type === 'string' && message.type.startsWith('clf-task-box-setup:')) {
+    const work=taskBoxSetupQueue.then(()=>taskBoxSetup(message,sender));
+    taskBoxSetupQueue=work.catch(()=>{});
+    work.then(sendResponse,error=>sendResponse({ok:false,error:String(error?.message || error)}));
+    return true;
+  }
+  if (taskBox?.handles(message?.type)) {
+    // Owned extension messages only. No external-extension or page message bridge.
+    serializeTab(tabId(sender),async () => {
+      await load();
+      // TASK BOX has its own local UI epoch. Do not overwrite the recorder's epoch
+      // with it; reuse the registry's current epoch while checking Chrome document ID.
+      const source=await authorizeDocument(sender,{navigationEpoch:tabEpochs[String(tabId(sender))] ?? 0});
+      if (!source.ok || !ownsDocument(source)) return {ok:false,protocol:taskBox.protocol,error:source.error || 'stale_document'};
+      const reply=await taskBox.handle(message,sender,()=>ownsDocument(source));
+      if (!ownsDocument(source)) return {ok:false,protocol:taskBox.protocol,error:'stale_document'};
+      return reply;
+    }).then(sendResponse, error =>
+      sendResponse({ok:false,protocol:taskBox.protocol,error:String(error?.message || error)}));
+    return true;
+  }
   const handler = message && typeof message.type === 'string' ? HANDLERS[message.type] : null;
   if (!handler) {
     sendResponse({ ok: false, error: 'unknown_message' });
@@ -3409,6 +3462,7 @@ async function restoreChatgptTab(id) {
       } catch {
         // The tab can navigate between the ping and repair. Static injection covers it.
       }
+      await restoreTaskBoxTab(id);
       return true;
     }
   } catch {
@@ -3424,6 +3478,7 @@ async function restoreChatgptTab(id) {
     await chrome.scripting.executeScript({ target: { tabId: id }, world: 'MAIN', files: ['fiber.js'] });
     await chrome.scripting.executeScript({ target: { tabId: id }, files: ['content.js'] });
     await chrome.scripting.insertCSS({ target: { tabId: id }, files: ['overlay.css'] });
+    await restoreTaskBoxTab(id);
     // Successful injection means this exact tab is recovering. Its document registration will
     // re-run revival routing; opening a second tab during that handoff recreates the race.
     return true;
@@ -3431,6 +3486,20 @@ async function restoreChatgptTab(id) {
     // A complete exact tab that cannot receive or be repaired is proven unusable. Revival may
     // open one replacement; a loading tab is handled conservatively by the caller.
     return false;
+  }
+}
+
+async function restoreTaskBoxTab(id) {
+  if (!taskBox) return;
+  // Activation is deliberate. Installing this package never enables the old and new
+  // organizers together, and recorder recovery does not imply TASK BOX activation.
+  try {
+    const stored = await chrome.storage.local.get('taskBoxIntegrationEnabled');
+    if (stored.taskBoxIntegrationEnabled !== true) return;
+    await chrome.scripting.executeScript({target:{tabId:id},files:['task-box-core.js','task-box.js']});
+  } catch {
+    // Optional TASK BOX recovery must not declare an otherwise healthy recorder dead.
+    // Static injection on the next page load can retry discovery, never a deletion.
   }
 }
 

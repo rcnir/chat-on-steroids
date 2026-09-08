@@ -36,3 +36,14 @@ it('enables one update action after the app version advances', async () => {
   button.click();
   await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/apply'), expect.objectContaining({ method: 'POST' })));
 });
+
+it('never reloads or offers apply when a runtime candidate still needs controlled activation', async () => {
+  const {document,fetch}=await openWith({appVersion:'2.0.6',appliedVersion:'2.0.6',activationRequired:true,
+    reloadRequired:true,updateAvailable:true,busy:false});
+  const button=document.getElementById('rocaniiruPatchBtn') as HTMLButtonElement;
+  expect(button.textContent).toBe('Activation required');
+  expect(button.disabled).toBe(true);
+  button.click();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect((dom!.window as any).chrome.runtime.reload).not.toHaveBeenCalled();
+});

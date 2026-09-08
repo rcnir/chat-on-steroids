@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 // @ts-expect-error Runtime-tested .mjs updater intentionally has no TypeScript declaration file.
-import { compareVersions, extensionFingerprint, injectUpdaterBootstrap } from '../scripts/rocaniiru-updater-server.mjs';
+import { compareVersions, extensionFingerprint, injectUpdaterBootstrap, patchRecipe, patchAvailability, preparedRuntimeState, adoptedRuntimeState, ensureBootstrap } from '../scripts/rocaniiru-updater-server.mjs';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -12,6 +12,28 @@ it('compares weekly app versions without treating equal versions as updates', ()
   expect(compareVersions('2.0.7', '2.0.6')).toBe(1);
   expect(compareVersions('2.0.6', '2.0.6')).toBe(0);
   expect(compareVersions('2.0.5', '2.0.6')).toBe(-1);
+});
+
+it('supports an explicit runtime recipe and detects a new same-version patch without applying it', () => {
+  const config={recipes:{'2.0.6':{commit:'abcdef1234567',kind:'task-box-runtime'}}};
+  const info={version:'2.0.6',fingerprint:'base-fingerprint'};
+  const state={appliedVersion:'2.0.6',appliedPatchCommit:'1234567',reloadRequired:true};
+  expect(patchRecipe(config,'2.0.6')).toEqual({commit:'abcdef1234567',kind:'task-box-runtime'});
+  expect(patchRecipe({defaultPatchCommit:'1234567'},'2.0.6')).toEqual({commit:'1234567',kind:'extension'});
+  expect(()=>patchRecipe({recipes:{'2.0.6':{commit:'abcdef1234567',kind:'run-anything'}}},'2.0.6')).toThrow();
+  expect(patchAvailability(config,info,state)).toEqual({updateAvailable:true,activationRequired:false});
+  const prepared=preparedRuntimeState(state,info,patchRecipe(config,'2.0.6'),{descriptorPath:'prepared/package.json'});
+  expect(prepared.appliedPatchCommit).toBe('1234567');
+  expect(prepared.appliedVersion).toBe('2.0.6');
+  expect(prepared.reloadRequired).toBe(false);
+  expect(patchAvailability(config,info,prepared)).toEqual({updateAvailable:false,activationRequired:true});
+  expect(patchAvailability(config,{...info,fingerprint:'replaced-app'},prepared).activationRequired).toBe(false);
+  const descriptor={kind:'rocaniiru-task-box-package',protocol:1,version:info.version,
+    requiresManualActivation:true,candidate:{bundleFingerprint:'expected-installed-copy'}};
+  expect(adoptedRuntimeState(prepared,info,descriptor,'different-app')).toBeNull();
+  const adopted=adoptedRuntimeState(prepared,info,descriptor,'expected-installed-copy');
+  expect(adopted).toMatchObject({appliedPatchCommit:'abcdef1234567',activationRequired:false,reloadRequired:true});
+  expect(patchAvailability(config,info,adopted)).toEqual({updateAvailable:false,activationRequired:false});
 });
 
 it('adds only the persistent updater bootstrap around an existing extension tree', async () => {
@@ -44,4 +66,21 @@ it('fingerprints the upstream payload independently of updater metadata files', 
   await writeFile(path.join(root, '.rocaniiru-patch.json'), '{}');
   await writeFile(path.join(root, 'rocaniiru-updater.js'), 'x');
   expect(extensionFingerprint(root)).toBe(before);
+});
+
+it('freezes the stable extension while runtime adoption is unresolved, even if bundled bytes change',async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'task-box-pending-updater-'));roots.push(root);
+  const stable=path.join(root,'stable');await mkdir(stable);
+  await writeFile(path.join(stable,'background.js'),'KEEP_VALIDATED_STABLE');
+  const state={activationRequired:true,preparedVersion:'2.0.6',preparedBaseFingerprint:'old-base',
+    preparedPatchCommit:'abcdef1234567',preparedPackage:path.join(root,'missing-descriptor.json'),
+    seenAppVersion:'2.0.6',seenBundledFingerprint:'old-base'};
+  const raw=JSON.stringify(state);await writeFile(path.join(root,'state.json'),raw);
+  for(const version of ['2.0.6','2.0.7']){
+    const result=await ensureBootstrap({dataDir:root,stableExtension:stable,repoPath:root},
+      {version,fingerprint:'unexpected-bundle',bundled:path.join(root,'unvalidated-bundle')});
+    expect(result.refreshedBase).toBe(false);
+    expect(await readFile(path.join(stable,'background.js'),'utf8')).toBe('KEEP_VALIDATED_STABLE');
+    expect(await readFile(path.join(root,'state.json'),'utf8')).toBe(raw);
+  }
 });

@@ -16,7 +16,7 @@ import {
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SOURCE_MARKER = '.chat-on-steroids-source';
 const BOOTSTRAP_MARKER = '.rocaniiru-updater-bootstrap.json';
@@ -153,9 +153,63 @@ function loadState(config) {
 }
 function saveState(config, state) { jsonWriteAtomic(statePath(config), { ...state, schema: 1 }); }
 
-async function ensureBootstrap(config) {
-  const info = appInfo(config);
-  const state = loadState(config);
+export function patchRecipe(config, version) {
+  const raw = config.recipes?.[version] ?? config.defaultPatchCommit;
+  const recipe = typeof raw === 'string' ? {commit:raw,kind:'extension'} : raw;
+  if (!recipe || typeof recipe !== 'object' || Array.isArray(recipe) ||
+      typeof recipe.commit !== 'string' || !/^[0-9a-f]{7,40}$/i.test(recipe.commit) ||
+      !['extension','task-box-runtime'].includes(recipe.kind) ||
+      Object.keys(recipe).some(key => !['commit','kind'].includes(key))) {
+    throw new Error(`No supported patch recipe registered for ${version}`);
+  }
+  return {commit:recipe.commit,kind:recipe.kind};
+}
+
+export function patchAvailability(config, info, state) {
+  let recipe;
+  try { recipe = patchRecipe(config,info.version); } catch { return {updateAvailable:false,activationRequired:false}; }
+  const activationRequired = state.activationRequired === true && state.preparedVersion === info.version &&
+    state.preparedPatchCommit === recipe.commit && state.preparedBaseFingerprint === info.fingerprint;
+  const comparison = state.appliedVersion ? compareVersions(info.version,state.appliedVersion) : 1;
+  return {activationRequired,updateAvailable:!activationRequired &&
+    (comparison > 0 || (comparison === 0 && state.appliedPatchCommit !== recipe.commit))};
+}
+
+export function preparedRuntimeState(state, info, recipe, prepared) {
+  // Prepared is NOT applied. Keep the last actual applied revision and never ask Chrome
+  // to reload half of an app/companion protocol change.
+  return {...state,activationRequired:true,preparedVersion:info.version,preparedPatchCommit:recipe.commit,
+    preparedBaseFingerprint:info.fingerprint,preparedPackage:prepared.descriptorPath,
+    reloadRequired:false,lastError:null};
+}
+
+export function adoptedRuntimeState(state, info, descriptor, installedFingerprint) {
+  if (state.activationRequired !== true || state.preparedVersion !== info.version ||
+      descriptor?.kind !== 'rocaniiru-task-box-package' || descriptor.protocol !== 1 ||
+      descriptor.version !== info.version || descriptor.requiresManualActivation !== true ||
+      descriptor.candidate?.bundleFingerprint !== installedFingerprint) return null;
+  return {...state,appliedVersion:state.preparedVersion,appliedPatchCommit:state.preparedPatchCommit,
+    activationRequired:false,lastAppliedAt:Date.now(),reloadRequired:true,lastError:null};
+}
+
+export async function ensureBootstrap(config, observedInfo = null) {
+  // Tests may supply a read-only app observation without executing a platform tool.
+  // Production callers always use appInfo(config).
+  const info = observedInfo ?? appInfo(config);
+  let state = loadState(config);
+  let runtimeAdopted = false;
+  if (state.activationRequired && state.preparedBaseFingerprint !== info.fingerprint && state.preparedVersion === info.version) {
+    const descriptor=jsonRead(state.preparedPackage);
+    if (descriptor?.candidate?.bundleFingerprint) {
+      const packager=await import(pathToFileURL(path.join(config.repoPath,'scripts','rocaniiru-task-box-package.mjs')).href);
+      const adopted=adoptedRuntimeState(state,info,descriptor,packager.fingerprintTree(config.appPath));
+      if (adopted) { state=adopted;runtimeAdopted=true;saveState(config,state); }
+    }
+  }
+  // A changed bundle is not automatically the candidate we prepared. While runtime
+  // adoption is unresolved, even refreshing the stable extension would publish an
+  // unverified half of the app/companion change on a later manual browser reload.
+  if (state.activationRequired === true) return {info,state,refreshedBase:false};
   const updaterScript = path.join(config.dataDir, UPDATE_SCRIPT);
   if (!existsSync(updaterScript)) throw new Error('Persistent updater script is missing');
 
@@ -168,7 +222,7 @@ async function ensureBootstrap(config) {
       replaceTreeAtomic(tree, config.stableExtension);
       state.seenAppVersion = info.version;
       state.seenBundledFingerprint = info.fingerprint;
-      state.reloadRequired = false;
+      state.reloadRequired = runtimeAdopted;
       state.lastError = null;
       saveState(config, state);
     } finally { rmSync(temp, { recursive: true, force: true }); }
@@ -191,14 +245,16 @@ const job = { busy: false, phase: 'idle', message: '', error: null, targetVersio
 
 function publicStatus(config, info, state) {
   const comparison = state.appliedVersion ? compareVersions(info.version, state.appliedVersion) : 1;
+  const availability = patchAvailability(jsonRead(config.configPath,config),info,state);
   return {
     ok: true,
     appVersion: info.version,
     appliedVersion: state.appliedVersion,
-    updateAvailable: comparison > 0,
+    ...availability,
     busy: job.busy,
     phase: job.phase,
-    message: job.message || (comparison > 0 ? 'The app has a newer version than the applied ROCANIIRU patch.' : comparison < 0 ? 'The app is older than the recorded patch version.' : 'ROCANIIRU patch is current.'),
+    message: availability.activationRequired ? 'TASK BOX package prepared. A controlled app/companion cutover is required; nothing was restarted.' :
+      job.message || (comparison > 0 ? 'The app has a newer version than the applied ROCANIIRU patch.' : comparison < 0 ? 'The app is older than the recorded patch version.' : 'ROCANIIRU patch is current.'),
     error: job.error || state.lastError,
     reloadRequired: state.reloadRequired === true
   };
@@ -221,8 +277,8 @@ async function buildAndApply(config, targetVersion) {
   const startedInfo = appInfo(config);
   if (startedInfo.version !== targetVersion) throw new Error('App version changed before patch preparation started');
   const recipeConfig = jsonRead(config.configPath, config);
-  const patchCommit = recipeConfig.recipes?.[targetVersion] || recipeConfig.defaultPatchCommit;
-  if (!patchCommit || !/^[0-9a-f]{7,40}$/i.test(patchCommit)) throw new Error(`No patch recipe registered for ${targetVersion}`);
+  const recipe = patchRecipe(recipeConfig,targetVersion);
+  const patchCommit = recipe.commit;
 
   const jobsDir = path.join(config.dataDir, 'jobs');
   await mkdir(jobsDir, { recursive: true });
@@ -247,6 +303,27 @@ async function buildAndApply(config, targetVersion) {
 
     const latestInfo = appInfo(config);
     if (latestInfo.version !== targetVersion || latestInfo.fingerprint !== startedInfo.fingerprint) throw new Error('App changed while the patch was being validated');
+
+    if (recipe.kind === 'task-box-runtime') {
+      await runCommand('/opt/homebrew/bin/npm',['run','build'],{cwd:worktree,logFile,phase:'building',message:'Building the direct Clear bridge…'});
+      const packagerPath = path.join(worktree,'scripts','rocaniiru-task-box-package.mjs');
+      const packager = await import(pathToFileURL(packagerPath).href);
+      const expectedBaseline = packager.fingerprintTree(config.appPath);
+      // Only --prepare. Never call the older GUI-smoke/app-restart patcher here.
+      const outputRoot = path.join(config.dataDir,'prepared',`${targetVersion}-${Date.now()}`);
+      await runCommand(process.execPath,[packagerPath,'--prepare','--installed-app',config.appPath,
+        '--expected-baseline',expectedBaseline,'--output-root',outputRoot],{
+        cwd:worktree,logFile,phase:'preparing-runtime',message:'Preparing a verified copy without starting or replacing the app…'
+      });
+      const descriptorPath = path.join(outputRoot,'task-box-package.json');
+      const descriptor = jsonRead(descriptorPath);
+      if (descriptor?.requiresManualActivation !== true || descriptor?.smokeLaunched !== false || descriptor?.resetsStorage !== false) {
+        throw new Error('Runtime package did not preserve the manual-activation boundary');
+      }
+      saveState(config,preparedRuntimeState(loadState(config),latestInfo,recipe,{descriptorPath}));
+      job.phase='prepared';job.message='TASK BOX runtime package prepared; controlled activation required.';
+      return;
+    }
 
     const preparedRoot = path.join(config.dataDir, 'prepared', targetVersion);
     const prepared = path.join(preparedRoot, 'extension');
@@ -283,7 +360,7 @@ async function buildAndApply(config, targetVersion) {
 async function startApply(config) {
   if (job.busy) return;
   const { info, state } = await ensureBootstrap(config);
-  if (state.appliedVersion && compareVersions(info.version, state.appliedVersion) <= 0) return;
+  if (!patchAvailability(jsonRead(config.configPath,config),info,state).updateAvailable) return;
   job.busy = true; job.error = null; job.phase = 'starting'; job.message = `Preparing patch for ${info.version}…`;
   state.lastError = null; saveState(config, state);
   void buildAndApply(config, info.version).catch((error) => {

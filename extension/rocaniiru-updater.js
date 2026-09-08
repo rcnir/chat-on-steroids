@@ -67,6 +67,14 @@
     const note = id('rocaniiruPatchStatus');
     const appVersion = status.appVersion || '?';
     const applied = status.appliedVersion || 'none';
+    if (status.activationRequired === true) {
+      meta.textContent = `App ${appVersion} · runtime package prepared`;
+      button.disabled = true;
+      button.textContent = 'Activation required';
+      note.classList.remove('bad');
+      note.textContent = status.message || 'Prepared only. Complete the controlled app/companion cutover before enabling TASK BOX.';
+      return;
+    }
     if (status.reloadRequired && !status.updateAvailable && !reloadAckInFlight) {
       reloadAckInFlight = true;
       button.disabled = true;

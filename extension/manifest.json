@@ -4,6 +4,7 @@
   "version": "2.0.6",
   "description": "Records your ChatGPT session into the local Chat On Steroids app and labels its MCP tool calls with what they actually did.",
   "minimum_chrome_version": "116",
+  "options_page": "task-box-setup.html",
   "permissions": [
     "storage",
     "scripting",
@@ -19,7 +20,7 @@
     "http://127.0.0.1:8769/*"
   ],
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "task-box-worker.js",
     "type": "module"
   },
   "content_scripts": [
@@ -30,7 +31,9 @@
       ],
       "js": [
         "chatgpt-dom.js",
-        "content.js"
+        "content.js",
+        "task-box-core.js",
+        "task-box.js"
       ],
       "css": [
         "overlay.css"

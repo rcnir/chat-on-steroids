@@ -1,4 +1,5 @@
 import { pendingChatModelRequest, observeChatModels } from './chat-models.js';
+import { taskBoxClearService, resetTaskBoxClearRuntimeForTests } from './task-box-clear-runtime.js';
 import { isProModel } from '../shared/chat-models.js';
 import type { SessionSummary } from '../shared/session.js';
 import { publishBrowserDecision, authorizeBrowserInput, sessionInputPolicy } from './session/input.js';
@@ -1379,6 +1380,47 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // consume the browser's shared budget before failing origin/authentication.
   if (rateLimited()) return json(res, 429, { error: 'rate_limited' }, origin);
   if (noteBrowserSeen()) changed();
+
+  // Explicit companion Clear only. The existing origin/auth/protocol/rate gates above
+  // also protect status. No browser, AX or file-disappearance inference participates.
+  if (route === '/task-box/capabilities' && req.method === 'GET') {
+    return json(res, 200, taskBoxClearService().capability(), origin);
+  }
+  if (route === '/task-box/clear' || route === '/task-box/clear/status') {
+    const isStatus = route.endsWith('/status');
+    if (req.method !== (isStatus ? 'GET' : 'POST')) return json(res, 405, { ok:false, error:'method_not_allowed' }, origin);
+    let body: Record<string, unknown>;
+    try {
+      if (isStatus) {
+        const keys = [...url.searchParams.keys()];
+        if (keys.length !== 3 || new Set(keys).size !== 3 || keys.some(key => !['requestId','tabId','documentId'].includes(key))) {
+          return json(res, 400, { ok:false, error:'invalid_task_box_request' }, origin);
+        }
+        const tab = url.searchParams.get('tabId') || '';
+        body = { requestId:url.searchParams.get('requestId'), owner:{ tabId:/^\d+$/.test(tab) ? Number(tab) : -1, documentId:url.searchParams.get('documentId') } };
+      } else {
+        const raw = await readBody(req);
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return json(res, 400, { ok:false, error:'invalid_task_box_request' }, origin);
+        body = raw as Record<string, unknown>;
+        if (Object.keys(body).some(key => !['requestId','owner'].includes(key))) return json(res, 400, { ok:false, error:'invalid_task_box_request' }, origin);
+      }
+    } catch (error) {
+      if ((error as Error).message === 'body_too_large') return tooLarge(res, origin);
+      return json(res, 400, { ok:false, error:'invalid_task_box_request' }, origin);
+    }
+    const owner = body.owner as {tabId?:unknown;documentId?:unknown} | null;
+    if (!owner || Array.isArray(owner) || Object.keys(owner).some(key => !['tabId','documentId'].includes(key)) ||
+        !Number.isSafeInteger(owner.tabId) || (owner.tabId as number) < 0 ||
+        typeof owner.documentId !== 'string' || owner.documentId.length < 1 || owner.documentId.length > 256 ||
+        typeof body.requestId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(body.requestId)) {
+      return json(res, 400, { ok:false, error:'invalid_task_box_request' }, origin);
+    }
+    const source = {tabId:owner.tabId as number, documentId:owner.documentId};
+    const result = isStatus
+      ? await taskBoxClearService().status(source,body.requestId)
+      : await taskBoxClearService().request(source,body.requestId);
+    return json(res, result.ok ? 200 : 409, {protocol:1,...result}, origin);
+  }
 
   if (route === '/models' && req.method === 'POST') {
     const accepted = observeChatModels(await readBody(req));
@@ -7553,6 +7595,7 @@ export async function restoreCommands(): Promise<void> {
 
 /** Test seam. */
 export function resetBridgeForTests(): void {
+  resetTaskBoxClearRuntimeForTests();
   for (const command of commands) if (command.timer) clearTimeout(command.timer);
   if (browserPresenceTimer) clearTimeout(browserPresenceTimer);
   browserPresenceTimer = null;

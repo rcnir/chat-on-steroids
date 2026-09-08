@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TASK BOX — 初回切替</title>
+  <style>
+    body{font:16px/1.8 system-ui,sans-serif;max-width:760px;margin:56px auto;padding:0 24px}
+    h1{font-size:28px} label{display:block;margin:20px 0} button{font:inherit;padding:8px 20px}
+    #status{padding:16px;background:#f3f4f5;border-radius:8px} small{display:block;margin:24px 0}
+  </style>
+</head>
+<body>
+  <h1>TASK BOX — 初回切替</h1>
+  <p>公式Clearへの直接接続を使うcompanion統合版です。この設定だけでClearやチャット削除は実行しません。</p>
+  <p id="status" role="status">接続を確認しています。</p>
+  <label><input id="oldDisabled" type="checkbox">旧「Chat On Steroids CLEAR」拡張を無効にし、旧版が残るChatGPTページを読み込み直しました。</label>
+  <label><input id="reviewed" type="checkbox">以前の成否不明の処理は保存・確認済みです。この切替は旧処理の成功判定や再実行ではなく、新しいBOX CLEARは別の明示操作になることを確認しました。</label>
+  <button id="enable" type="button" disabled>統合版を有効にする</button>
+  <small>旧拡張の無効化はこのページから検査・操作しません。確認欄は利用者による申告です。
+    アプリの対応版が未反映、または統合版に未完了の処理がある場合は有効化できません。
+    通常チャットを含むTASK BOX全体が削除対象であり、復元可能なゴミ箱ではありません。</small>
+  <script src="task-box-setup.js"></script>
+</body>
+</html>

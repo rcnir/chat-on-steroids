@@ -1,4 +1,5 @@
 import { noteChatOrigin } from './session/recorder.js';
+import { clearSwarmDurably } from './swarm-clear.js';
 import { REASONING_EFFORTS } from '../shared/session.js';
 import { getChatModels, startChatModelDiscovery, configureChatModelDiscovery } from './chat-models.js';
 import { releaseSessionFinish, requestSessionFinishGoal } from './session/finish.js';
@@ -78,7 +79,6 @@ import {
   onSwarmChange,
   pauseSwarmForDisable,
   persistAgentAuthorityNow,
-  resetSwarm,
   swarmState
 } from './agents.js';
 import { tokenPressure } from '../shared/session.js';
@@ -911,13 +911,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
   // ----------------------------------------------------------------- swarm
 
   handle('swarm:get', async () => swarmState());
-  handle('swarm:reset', async () => {
-    resetSwarm();
-    if (!(await persistAgentAuthorityNow())) {
-      throw new Error('The cleared run could not be made durable. Retry clearing the swarm.');
-    }
-    return swarmState();
-  });
+  handle('swarm:reset', () => clearSwarmDurably());
   /**
    * Clearing one row in the app: the prime ends the run, a worker frees its own slot.
    *

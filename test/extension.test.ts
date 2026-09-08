@@ -514,6 +514,7 @@ function loadWorker(options: {
   >;
   tabsSendMessage?: (tabId: number, message: Record<string, unknown>) => Promise<unknown>;
   windowsGet?: (windowId: number) => Promise<{ focused?: boolean }>;
+  taskBoxHandler?: (...args: any[]) => Promise<any>;
 }): WorkerHarness {
   let listener: ((message: any, sender: any, sendResponse: (value: any) => void) => boolean) | null = null;
   let externalListener: ((message: any, sender: any, sendResponse: (value: any) => void) => boolean) | null = null;
@@ -619,6 +620,8 @@ function loadWorker(options: {
   };
   const fetch = options.fetch ?? (async () => response(503, {}));
   vm.runInNewContext(backgroundSource, {
+    ...(options.taskBoxHandler ? {CLFTaskBoxBackground:{registerTaskBox:()=>({protocol:1,
+      handles:(type:string)=>type?.startsWith('clf-task-box:'),handle:options.taskBoxHandler})}} : {}),
     chrome,
     fetch,
     AbortController,
@@ -756,6 +759,20 @@ function journalOf(session: FakeStorageArea): any[] {
   const value = session.data.journal;
   return Array.isArray(value) ? value : [];
 }
+
+describe('TASK BOX shares the recorder document boundary',()=>{
+  it('rejects the retired document before it can reach the TASK BOX handler',async()=>{
+    const handler=vi.fn(async()=>({ok:true,protocol:1}));
+    const h=loadWorker({local:new FakeStorageArea(),session:new FakeStorageArea(),taskBoxHandler:handler});
+    await h.registerTab(7,'old-document');
+    await h.registerTab(7,'current-document');
+    const stale=await h.send({type:'clf-task-box:clear',protocol:1},7,'old-document');
+    expect(stale).toMatchObject({ok:false,error:'stale_document'});
+    expect(handler).not.toHaveBeenCalled();
+    expect(await h.send({type:'clf-task-box:probe',protocol:1},7,'current-document')).toMatchObject({ok:true});
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('accepted helper tab cleanup', () => {
   for (const outcome of ['accepted', 'rejected', 'navigated'] as const) {
