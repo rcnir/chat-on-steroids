@@ -14,7 +14,7 @@
 
 | 管理対象 | 正本 | 意味 |
 |---|---|---|
-| 公式アプリ | 公式 release と、その配布物 | 2.0.6、2.0.7 など。companion の公式版・bridge protocol と一致させる |
+| 公式アプリ | 公式 release と、その配布物 | 2.0.6、2.0.7、2.0.8 など。companion の公式版・bridge protocol と一致させる |
 | TASK BOX 機能 | `patcher/task-box/feature.json` の `featureVersion` | Project 操作・Clear 連携・不具合修正の版。本体と独立して更新する |
 | 接続契約 | 同ファイルの `protocol`、`adapterRevision`、`releases` | TASK BOX protocol、DOM adapter、検証済みの本体・companion の組み合わせ |
 
@@ -153,6 +153,8 @@ BOX CLEARの再クリック、Clearの再送、別のProject削除をしませ�
 
 本体と拡張が不一致なら TASK BOX を使用せず、検証済みの本体・companion の組み合わせへ戻します。退避本体の復元も本体停止下の明示作業です。状態ファイルやChrome storageを過去のバックアップで巻き戻すと二重実行防止を失うため、ペイロードの切り戻しと状態の保持を分けます。
 
+workerの移動が `UI_BUSY` で止まった場合は、まずその会話に開いているメニュー・ダイアログを確認します。新機能の案内など、閉じても作業を失わないと確認できたものだけを閉じます。移動先選択や作成をまだ送っていないことと、workerが応答終了済みであることを確認できた場合は、そのworkerページの一度の再読み込みで通常の自動整理を再確認できます。状態の初期化、無関係なダイアログの自動消去、無制限の再試行で安全停止を迂回しません。
+
 過去の実機検証経緯は [`docs/task-box.md`](docs/task-box.md) を参照してください。本稿は、その履歴を成功で上書きするものではありません。
 
 ## 分離版の検証記録 — 2026-09-09
@@ -190,3 +192,19 @@ updaterは `taskBoxAddon: true`、暗黙の `defaultPatchCommit` は `null` に�
 2.0.8未登録時の拒否を回帰テストで確認した後、2.0.6・2.0.7・2.0.8の公式配布物を含む関連12ファイル **202/202成功**を確認しました。`npm run verify` は **2,948成功・104スキップ・1失敗**で、失敗は従来と同じbundled ripgrepのPATH選択です。104スキップのうち4件のrelease-matrixテストは、上記202件の実行で別途成功しています。型チェックは成功し、配布候補の署名・ASAR整合性・入力保持も検証済みです。候補作成時点では2.0.8の実機受け入れは未実施です。
 
 この更新の出発点は、既に切替済みの2.0.7です。過去の調査文にある「2.0.6から直接2.0.8へ」という予定を、現物確認なしに実行しません。権限再承認が必要な場合はユーザーがmacOS側で行い、必要な手動再起動を更新記録に分けて残します。パッチャーがTCC設定を変更・リセットしたり、再起動を繰り返して解消しようとしたりしません。
+
+## 本番切替後の受け入れ — 2.0.8 / 2026-09-09
+
+`6eebd3c` の2.0.8対応候補は、制御された切替runnerによって03:28:53〜03:29:00（日本時間）に反映されました。runnerの終了要求・適用・起動要求は各1回で、runnerは終了済みです。ユーザーから2.0.8起動の報告を受けた後、Coreのコマンド実行とDesktopの読み取り接続が復帰し、稼働本体の全体fingerprintが準備済み候補と一致することを再確認しました。この受け入れ継続では本体を再起動していません。
+
+本体とstable配布物は2.0.8でしたが、Chromeに登録済みのcompanionはまだ2.0.7だったため、companionだけを一度再読み込みしました。その後の登録版は2.0.8です。ファイルの一致だけでなく、実装チャットと検証用Projectページで、実行中のappVersion 2.0.8、TASK BOX機能1.0.0、Bridge protocol 13、TASK BOX protocol 1、adapter revision 2、healthy runtimeを確認しました。登録版確認後にupdaterのreload待ちをacknowledgeし、activationRequired / updateAvailable / reloadRequiredはすべてfalseになっています。
+
+fresh workerを1件だけ起動しました。最初の自動移動はChatGPTの「画像生成が大幅に進化」という案内ダイアログによって `UI_BUSY` で安全停止しました。確認した同じ案内内の「閉じる」だけを1回押し、応答終了済みの同じテストworkerページを1回再読み込みした後、本番companionが自動移動を完了しました。手動move、機能コードの変更、検証用runtimeへの差し替え、テストフック、lifecycleや試行回数の直接リセットは使用していません。**これは「案内ダイアログを閉じた後の自動移動成功」であり、初回から無介入で成功したとの記録ではありません。** 最初の失敗観測も保存しています。
+
+移動完了記録の `moveCompleted: true` と、同じworkerのProject内会話カードを照合しました。実画面には `Fresh Worker Validation` がTASK BOX内に表示され、移動後の同じworkerから `TASK_BOX_208_ALIVE` の返答とfinishを会話記録でも確認しました。新しいProjectは作らず、既存TASK BOXを再使用しています。検証時のTASK BOXは1件、BOX CLEARはready、generation 3 / presentのままです。
+
+閲覧検証では、既存Projectへの直リンク表示が「Try again」で止まる観測もありました。同じ検証用タブを再使用し、ChatGPTホームのexact TASK BOX行にある標準Project-home操作から開くと、正常なProjectと実際の会話一覧を確認できました。直リンクの読み込み失敗の原因は確定しておらず、Project消失や再作成の根拠にはしていません。
+
+既存3件のClear完了receiptは、更新前・起動確認後・受け入れ終了時でファイルhashが一致しています。機能有効化設定と過去のcleanup完了記録も保持し、Clear・Project削除・Project再作成は行っていません。旧2.0.7本体の切り戻しコピーも元のfingerprintと一致します。
+
+検証用の一時拡張ファイル10個と診断タブは撤去済みです。終了時に、本体・stable companion・機能fingerprintがそれぞれ検証済み候補／updater構成と一致することを確認しました。**2.0.8への本番反映、状態保持、案内ダイアログを閉じた後の自動移動と移動後応答を確認済みです。2.0.8での破壊的なBOX CLEAR通しテストは再実行していません。** 事前の202件の関連テストや旧版の削除テストを、その代わりの実機PASSとして扱いません。
