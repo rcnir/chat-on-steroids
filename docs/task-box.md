@@ -1,5 +1,27 @@
 # TASK BOX — companion integration
 
+## Live one-click acceptance — 2026-09-09
+
+The human's subsequent BOX CLEAR on the deployed native-dialog repair
+(`25c2ffc`, adapter revision 2) completed the entire flow in 2,679 ms. The
+browser's latest operation recorded completed Clear, Project deletion and
+recreation with no error. Its request and document owner matched a completed
+app-side durable Clear receipt; the coordinator advanced from generation 2 to
+generation 3, present.
+
+An independent view of the newly created exact TASK BOX showed one sidebar row,
+zero chat cards and the native no-chats empty state. Both the page structure and
+a captured Project-window image were checked. The live adapter was revision 2,
+healthy, without test mode or acceptance hooks, and BOX CLEAR was ready again.
+No operator Clear, Project deletion, creation, recovery or restart was used to
+complete this click. The app Clear ledger was unchanged during observation.
+
+This successful through-flow used an empty Project. Earlier non-worker chat
+deletion and fresh-worker filing evidence remain separate; the empty run does
+not invent another populated-Project test. Historical failures and recovery
+records remain preserved. This acceptance does not change the known baseline
+ripgrep test failure or claim compatibility with future provider UI versions.
+
 ## Native create-dialog repair checkpoint
 
 The first integrated human cleanup reached a completed direct-Clear receipt and
@@ -31,8 +53,9 @@ reloading the extension. The original failed cleanup diagnostic remains unchange
 
 The final focused run passed 162 tests across the adapter, authenticated bridge,
 coordinator/service, packaging, setup and updater boundaries. Restoring the box
-and verifying live recreation does not retroactively turn the original failed
-one-click cleanup into a pass; a new full live user click remains unverified.
+and verifying live recreation did not retroactively turn the original failed
+one-click cleanup into a pass. Full live acceptance was still pending at that
+checkpoint; the later successful user click is recorded above.
 
 TASK BOX is an optional companion feature. It is off until the extension's
 `task-box-setup.html` page records an explicit cutover acknowledgement. Merely
@@ -153,7 +176,7 @@ Clear POST reply and finishes through a same-request status read with one Clear,
 one Project delete, and one empty recreation, including a manually-filed ordinary
 chat. This remains an isolated integration test, not a live browser E2E.
 
-Live acceptance still requires a fresh-worker move and the human's final BOX
+Live acceptance requires a fresh-worker move and the human's final BOX
 CLEAR against the deployed build. Package preparation, unit tests, and an enabled
 button are not substitutes for that acceptance.
 
