@@ -4,6 +4,7 @@
   const GLOBAL_KEY = 'taskBoxCreationGlobal';
   const LEGACY_PREFIX = 'taskBoxCreationAttempt:';
   const CLEAR_ATTEMPT_PREFIX = 'taskBoxClearAttempt:';
+  const MANUAL_RECOVERY_PREFIX = 'taskBoxManualRecovery:';
 
   function create(storage) {
     if (!storage || typeof storage.get !== 'function' || typeof storage.set !== 'function') {
@@ -34,6 +35,63 @@
       record?.requestId === ticket.requestId && record?.mode === ticket.mode;
     const sameDeletionTicket = (record,ticket) => record?.generation === ticket.generation &&
       record?.requestId === ticket.requestId && record?.kind === ticket.kind;
+
+    function manualRecoveryView(stored,requestId,generation) {
+      if (!validText(requestId) || !Number.isInteger(generation) || generation < 0) {
+        return fail('TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE');
+      }
+      const current = stored?.[GLOBAL_KEY];
+      const attempt = stored?.[`${CLEAR_ATTEMPT_PREFIX}${requestId}`];
+      const recovery = stored?.[`${MANUAL_RECOVERY_PREFIX}${requestId}`];
+      const toGeneration = generation + 1;
+
+      // A recovery receipt is an idempotency fence, not permission to release a new lifecycle.
+      // It is accepted only while the global state still reflects the exact transition it records.
+      if (recovery?.state === 'completed' && recovery.requestId === requestId &&
+          recovery.fromGeneration === generation && recovery.toGeneration === toGeneration &&
+          recovery.reason === 'human-attested-manual-project-delete' &&
+          current?.state === 'open' && current.generation === toGeneration) {
+        return {ok:true,alreadyRecovered:true,state:'open',generation:toGeneration};
+      }
+      if (recovery !== undefined) {
+        return fail('TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE');
+      }
+
+      if (current?.state !== 'deleting' || current.kind !== 'clear' || current.clearCompleted !== true ||
+          current.requestId !== requestId || current.generation !== generation || !validOwner(current.owner) ||
+          attempt?.state !== 'completed' || attempt.kind !== 'clear' || attempt.requestId !== requestId ||
+          attempt.generation !== generation || !ownerMatches(attempt,current.owner)) {
+        return fail('TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE');
+      }
+      return {ok:true,available:true,owner:{tabId:current.owner.tabId,documentId:current.owner.documentId},generation};
+    }
+
+    function manualDeletionRecoveryStatus(requestId,generation) {
+      return serial(async () => {
+        const stored = await storage.get([
+          GLOBAL_KEY,
+          `${CLEAR_ATTEMPT_PREFIX}${requestId}`,
+          `${MANUAL_RECOVERY_PREFIX}${requestId}`
+        ]);
+        return manualRecoveryView(stored,requestId,generation);
+      });
+    }
+
+    function recoverManualDeletion(requestId,generation) {
+      return serial(async () => {
+        const recoveryKey = `${MANUAL_RECOVERY_PREFIX}${requestId}`;
+        const stored = await storage.get([GLOBAL_KEY,`${CLEAR_ATTEMPT_PREFIX}${requestId}`,recoveryKey]);
+        const view = manualRecoveryView(stored,requestId,generation);
+        if (!view.ok || view.alreadyRecovered) return view;
+        const toGeneration = generation + 1;
+        const receipt = {
+          state:'completed',requestId,fromGeneration:generation,toGeneration,
+          reason:'human-attested-manual-project-delete'
+        };
+        await storage.set({[GLOBAL_KEY]:{state:'open',generation:toGeneration},[recoveryKey]:receipt});
+        return {ok:true,recovered:true,state:'open',generation:toGeneration};
+      });
+    }
 
     async function readGlobal() {
       const stored = await storage.get(GLOBAL_KEY);
@@ -161,8 +219,11 @@
       });
     }
 
-    return {observePresent,reserveWorker,completeCreation,beginDeletion,pendingClear,clearCompleted,confirmDeletion};
+    return {
+      observePresent,reserveWorker,completeCreation,beginDeletion,pendingClear,clearCompleted,confirmDeletion,
+      manualDeletionRecoveryStatus,recoverManualDeletion
+    };
   }
 
-  globalThis.CLFTaskBoxCoordinator = Object.freeze({create,GLOBAL_KEY,CLEAR_ATTEMPT_PREFIX});
+  globalThis.CLFTaskBoxCoordinator = Object.freeze({create,GLOBAL_KEY,CLEAR_ATTEMPT_PREFIX,MANUAL_RECOVERY_PREFIX});
 })();

@@ -18,7 +18,7 @@
 | TASK BOX 機能 | `patcher/task-box/feature.json` の `featureVersion` | Project 操作・Clear 連携・不具合修正の版。本体と独立して更新する |
 | 接続契約 | 同ファイルの `protocol`、`adapterRevision`、`releases` | TASK BOX protocol、DOM adapter、検証済みの本体・companion の組み合わせ |
 
-現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.2`、TASK BOX protocol は `1`、DOM adapter revision は `3` です。
+現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.3`、TASK BOX protocol は `1`、DOM adapter revision は `3` です。
 
 ## ソースの配置
 
@@ -224,3 +224,15 @@ fresh worker の自動移動で、Project作成予約の直前に `INVALID_CREAT
 後続の `UI_BUSY` は、ユーザーがProject UIを操作中なら安全に停止すべき状態です。一方、旧 `schedule()` はcatchが設定した `800 / 1800 / 4000 / 8000 ms` のretry待ちを、`pointerover`・focus・MutationObserverの `schedule(0 / 180)` で短縮できました。実ログでも同じworkerが約0.34秒内に4回 `UI_BUSY` を消費しています。1.0.2ではretryのnot-before時刻を持ち、通常のDOMイベントはその時刻を前倒しできないようにしました。また4本目の `8000 ms` が旧 `MAX_MOVE_ATTEMPTS` のoff-by-oneで到達不能だったため、初回＋4 retryの5試行に修正しています。retry対象は従来どおり、target/createをまだ送っていないdiscovery failureだけです。無制限retryにはしていません。
 
 このDOM adapter変更に伴いadapter revisionを `3` に上げています。既存rev2 runtimeは新しいrev3が注入されたときにhealthy incumbentとして残らず、既存のtakeover境界で停止・置換されます。TASK BOX protocolは `1` のままです。**既存の実機lifecycle `deleting` はこのコード更新だけでは解消しません。過去の未完了削除を「完了」に書き換えたり、同じClearを再送したりすることは禁止したままです。**
+
+## TASK BOX 1.0.3 — 手動削除済みProjectの限定lifecycle recovery / 2026-09-11
+
+上記の実機lifecycleでは、request `2c772e6c-aae4-4567-bfd1-83a7bc833ea7` の公式Clearはapp側durable receiptで完了済みでしたが、browser側はProject削除確認に失敗したため `deleting / clearCompleted:true / generation:14` に残りました。その後、利用者がTASK BOX Projectを手動削除済みであることを明示しています。1.0.3は、この既知状態をstorage resetや過去操作のreplayで隠さず、**exact completed-Clearだけをbrowser lifecycle上でreconcileする専用recovery**を追加します。
+
+recoveryは一般的な `reserved` / `deleting` 解放APIではありません。browser coordinatorが同じrequest/generationの `deleting + kind:clear + clearCompleted:true` とcompleted Clear attempt receiptを確認し、backgroundが保存済みownerを**app receiptのread-only照合だけ**に使って `GET /task-box/clear/status` のexact completedを再確認します。setup pageはextension-originに限定し、利用者が「過去結果を確認した」「TASK BOX Projectを手動削除済み」と明示した場合だけexact request/generationを渡します。照合中にlifecycleが変われば停止します。
+
+成功時はClear、Project削除、Project作成を一切再実行せず、global lifecycleだけをgeneration+1の `open` へ進めます。旧Clear attemptとapp receiptは削除せず、manual recovery receiptを追加して同じrecovery自体もidempotentにします。次のfresh workerが通常のreserve/create経路で新しい空TASK BOXを作成するまで、Projectは存在しない状態が正しいです。`POST /task-box/clear`、Project delete DOM action、自動recreateはこのrecovery経路にありません。
+
+この変更はcontent DOM adapter `task-box.js` を変更しないため、機能版のみ `1.0.3` へ上げ、TASK BOX protocol `1` / adapter revision `3` は維持します。**この記録時点ではソース実装と非GUI検証の段階であり、稼働中2.0.8への反映・既存generation 14の実機recovery・fresh workerによる再作成確認はまだ行っていません。** controlled activation前に既存browser/app receiptを保持し、同じClearやProject削除を再送してはいけません。
+
+1.0.3のfocused recovery/adapter検証は **45/45成功**、TASK BOX・updater隣接検証は **105成功・4スキップ**、typecheck・`git diff --check`・production buildは成功しました。full `npm run verify` は **2,963成功・104スキップ・1失敗**で、唯一の失敗は従来からのbundled ripgrep PATH選択（期待する `resources/rg/rg` ではなく `/opt/homebrew/bin/rg`）です。verifyがそこで終了するため `test/mcp-shutdown.test.ts` は単独で **2/2成功**を確認しました。この既知baseline failureは1.0.3のTASK BOX変更として修正・抑制していません。

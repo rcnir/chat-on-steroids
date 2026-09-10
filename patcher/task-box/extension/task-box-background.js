@@ -57,6 +57,53 @@
       return Number.isInteger(ticket.generation) && ticket.generation >= 0 && ticket.kind === 'clear' && validRequest(ticket.requestId);
     }
 
+    const sameOwner = (left,right) => left?.tabId === right?.tabId && left?.documentId === right?.documentId;
+
+    async function manualDeletionRecoveryStatus(requestId,generation) {
+      if (!validRequest(requestId) || !Number.isInteger(generation) || generation < 0) {
+        return reply({ok:false,error:'TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE'});
+      }
+      const before = await coordinator.manualDeletionRecoveryStatus(requestId,generation);
+      if (!before.ok) return reply(before);
+      if (before.alreadyRecovered) {
+        return reply({ok:true,recovered:true,alreadyRecovered:true,state:'open',generation:before.generation});
+      }
+      if (!(await enabled())) return reply({ok:false,error:'TASK_BOX_DISABLED'});
+      if (!(await capabilitiesReady())) return reply({ok:false,error:'TASK_BOX_CAPABILITY_UNAVAILABLE'});
+
+      // The old ChatGPT document is intentionally not revived as an owner. Its stored owner is
+      // used only to bind a read-only app receipt lookup to the exact Clear that already finished.
+      const afterCapability = await coordinator.manualDeletionRecoveryStatus(requestId,generation);
+      if (!afterCapability.ok || afterCapability.alreadyRecovered || !sameOwner(afterCapability.owner,before.owner)) {
+        return reply({ok:false,error:'TASK_BOX_STATE_CHANGED'});
+      }
+      const query = new URLSearchParams({
+        requestId,
+        tabId:String(before.owner.tabId),
+        documentId:before.owner.documentId
+      });
+      const result = await call(`/task-box/clear/status?${query.toString()}`, {method:'GET'});
+      if (!exactCompleted(result,requestId)) {
+        return reply({ok:false,error:'TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE'});
+      }
+      if (!(await enabled())) return reply({ok:false,error:'TASK_BOX_DISABLED'});
+      const afterReceipt = await coordinator.manualDeletionRecoveryStatus(requestId,generation);
+      if (!afterReceipt.ok || afterReceipt.alreadyRecovered || !sameOwner(afterReceipt.owner,before.owner)) {
+        return reply({ok:false,error:'TASK_BOX_STATE_CHANGED'});
+      }
+      return reply({ok:true,recoveryRequired:true,requestId,generation});
+    }
+
+    async function recoverManualDeletion(requestId,generation) {
+      const verified = await manualDeletionRecoveryStatus(requestId,generation);
+      if (!verified.ok || verified.alreadyRecovered) return verified;
+      if (verified.recoveryRequired !== true) {
+        return reply({ok:false,error:'TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE'});
+      }
+      const recovered = await coordinator.recoverManualDeletion(requestId,generation);
+      return reply(recovered);
+    }
+
     async function authorizeDelete(owner,ticket) {
       if (!validClearTicket(ticket)) return reply({ok:false,error:'INVALID_TASK_BOX_DELETE_TICKET'});
       // This is the linearization point for feature revocation before native ChatGPT
@@ -189,7 +236,9 @@
       return reply({ok:false,error:'TASK_BOX_UNKNOWN_ACTION'});
     }
 
-    return Object.freeze({handles,handle,protocol:PROTOCOL});
+    return Object.freeze({
+      handles,handle,manualDeletionRecoveryStatus,recoverManualDeletion,protocol:PROTOCOL
+    });
   }
 
   globalThis.CLFTaskBoxBackground = Object.freeze({registerTaskBox,protocol:PROTOCOL});

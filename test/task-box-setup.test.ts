@@ -1,21 +1,56 @@
+import {execFileSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
-import {describe,it,expect} from 'vitest';
+import {JSDOM} from 'jsdom';
+import {describe,it,expect,vi} from 'vitest';
+// @ts-expect-error Production patcher modules are intentionally plain ESM without a declaration sidecar.
+import {composeBackground} from '../patcher/task-box/extension-adapter.mjs';
 
-const source=readFileSync(new URL('../extension/background.js',import.meta.url),'utf8');
+const repo=process.cwd();
+const official=execFileSync('git',['show','v2.0.6:extension/background.js'],{cwd:repo,encoding:'utf8'});
+const source=composeBackground(official,{appVersion:'2.0.6',featureVersion:'task-box-test',protocol:1});
 const start=source.indexOf('async function taskBoxSetup(');
 const end=source.indexOf('\nchrome.runtime.onMessage.addListener',start);
 const setupSource=source.slice(start,end)+'\nglobalThis.setup=taskBoxSetup;';
 const setupUrl='chrome-extension://test-companion/task-box-setup.html';
 const sender={id:'test-companion',url:setupUrl,frameId:0};
-function harness(seed:Record<string,any>={},capable=true){
-  const data=structuredClone(seed);let writes=0;let calls=0;
-  const ctx:any={taskBox:{protocol:1},console,chrome:{runtime:{id:'test-companion',getURL:()=>setupUrl},storage:{local:{
+const setupHtml=readFileSync(new URL('../patcher/task-box/extension/task-box-setup.html',import.meta.url),'utf8');
+const setupJs=readFileSync(new URL('../patcher/task-box/extension/task-box-setup.js',import.meta.url),'utf8');
+function harness(seed:Record<string,any>={},capable=true,receiptCompleted=true){
+  const data=structuredClone(seed);let writes=0;let calls=0;let recoveries=0;let recoveryChecks=0;
+  const taskBox:any={protocol:1};
+  taskBox.manualDeletionRecoveryStatus=async(requestId:string,generation:number)=>{
+    recoveryChecks++;
+    const current=data.taskBoxCreationGlobal;
+    if(current?.state!=='deleting'||current?.kind!=='clear'||current?.clearCompleted!==true||
+        current.requestId!==requestId||current.generation!==generation){
+      return {ok:false,error:'TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE'};
+    }
+    if(!receiptCompleted) return {ok:false,error:'TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE'};
+    return {ok:true,recoveryRequired:true,requestId,generation};
+  };
+  taskBox.recoverManualDeletion=async(requestId:string,generation:number)=>{
+    const verified=await taskBox.manualDeletionRecoveryStatus(requestId,generation);
+    if(!verified.ok) return verified;
+    recoveries++;
+    const current=data.taskBoxCreationGlobal;
+    if(current?.state!=='deleting'||current?.kind!=='clear'||current?.clearCompleted!==true||
+        current.requestId!==requestId||current.generation!==generation){
+      return {ok:false,error:'TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE'};
+    }
+    data.taskBoxCreationGlobal={state:'open',generation:generation+1};
+    return {ok:true,recovered:true,state:'open',generation:generation+1};
+  };
+  const ctx:any={taskBox,TASK_BOX_CONTRACT:{protocol:1},console,URLSearchParams,chrome:{runtime:{id:'test-companion',getURL:()=>setupUrl},storage:{local:{
     get:async(keys:string|string[])=>Object.fromEntries((Array.isArray(keys)?keys:[keys]).filter(k=>k in data).map(k=>[k,structuredClone(data[k])])),
     set:async(values:Record<string,any>)=>{writes++;Object.assign(data,structuredClone(values));}
-  }}},call:async(route:string)=>{calls++;expect(route).toBe('/task-box/capabilities');return {ok:capable,data:{protocol:1,supported:capable,atMostOnce:true,durableReceipts:true}};}};
+  }}},call:async(route:string)=>{
+    calls++;
+    if(route==='/task-box/capabilities') return {ok:capable,data:{protocol:1,supported:capable,atMostOnce:true,durableReceipts:true}};
+    throw new Error(`unexpected ${route}`);
+  }};
   vm.runInNewContext(setupSource,ctx);
-  return {data,setup:ctx.setup,writes:()=>writes,calls:()=>calls};
+  return {data,setup:ctx.setup,writes:()=>writes,calls:()=>calls,recoveries:()=>recoveries,recoveryChecks:()=>recoveryChecks};
 }
 describe('TASK BOX explicit extension-origin cutover',()=>{
   it('refuses a ChatGPT page or another extension before reading capability or writing state',async()=>{
@@ -44,5 +79,83 @@ describe('TASK BOX explicit extension-origin cutover',()=>{
       expect(await h.setup({type,oldExtensionDisabled:true,previousOutcomeReviewed:true},sender)).toMatchObject({ok:false,error:'TASK_BOX_LIFECYCLE_BLOCKED'});
     }
     expect(h.data).toEqual(seed);expect(h.writes()).toBe(0);
+  });
+
+  it('offers only exact completed-Clear manual-deletion recovery and requires explicit human attestation',async()=>{
+    const seed={taskBoxIntegrationEnabled:true,taskBoxCreationGlobal:{
+      state:'deleting',generation:14,kind:'clear',requestId:'11111111-2222-4333-8444-555555555551',
+      owner:{tabId:17,documentId:'document-17'},clearCompleted:true
+    }};
+    const h=harness(seed);
+    expect(await h.setup({type:'clf-task-box-setup:status'},sender)).toMatchObject({
+      ok:true,enabled:true,recoveryRequired:true,recoveryRequestId:seed.taskBoxCreationGlobal.requestId,recoveryGeneration:14
+    });
+    expect((await h.setup({type:'clf-task-box-setup:recover-manual-delete',requestId:seed.taskBoxCreationGlobal.requestId,generation:14,
+      previousOutcomeReviewed:true},sender)).ok).toBe(false);
+    expect(h.recoveries()).toBe(0);
+    const recovered=await h.setup({type:'clf-task-box-setup:recover-manual-delete',
+      requestId:seed.taskBoxCreationGlobal.requestId,generation:14,
+      previousOutcomeReviewed:true,manualProjectDeletionConfirmed:true},sender);
+    expect(recovered).toMatchObject({ok:true,recovered:true,state:'open',generation:15});
+    expect(h.recoveries()).toBe(1);
+    expect(h.data.taskBoxCreationGlobal).toEqual({state:'open',generation:15});
+
+    const unconfirmed=harness(seed,true,false);
+    expect(await unconfirmed.setup({type:'clf-task-box-setup:status'},sender)).toMatchObject({
+      ok:false,error:'TASK_BOX_LIFECYCLE_BLOCKED'
+    });
+    expect(unconfirmed.recoveries()).toBe(0);
+  });
+
+  it('binds the setup recovery action to the exact status request and generation',async()=>{
+    const seed={taskBoxIntegrationEnabled:true,taskBoxCreationGlobal:{
+      state:'deleting',generation:14,kind:'clear',requestId:'11111111-2222-4333-8444-555555555551',
+      owner:{tabId:17,documentId:'document-17'},clearCompleted:true
+    }};
+    for(const message of [
+      {requestId:'33333333-4444-4555-8666-777777777771',generation:14},
+      {requestId:seed.taskBoxCreationGlobal.requestId,generation:13},
+      {requestId:seed.taskBoxCreationGlobal.requestId,generation:14,manualProjectDeletionConfirmed:false}
+    ]){
+      const h=harness(seed);
+      const result=await h.setup({type:'clf-task-box-setup:recover-manual-delete',previousOutcomeReviewed:true,
+        manualProjectDeletionConfirmed:true,...message},sender);
+      expect(result.ok).toBe(false);
+      expect(h.recoveries()).toBe(0);
+      expect(h.data).toEqual(seed);
+    }
+  });
+
+  it('shows a dedicated recovery confirmation and sends the exact status binding only after both acknowledgements',async()=>{
+    const requestId='11111111-2222-4333-8444-555555555551';
+    const sendMessage=vi.fn(async(message:any)=>{
+      if(message.type==='clf-task-box-setup:status') return {
+        ok:true,available:true,enabled:true,recoveryRequired:true,recoveryRequestId:requestId,recoveryGeneration:14
+      };
+      if(message.type==='clf-task-box-setup:recover-manual-delete') return {ok:true,recovered:true,state:'open',generation:15};
+      throw new Error(`unexpected ${message.type}`);
+    });
+    const dom=new JSDOM(setupHtml,{url:setupUrl,runScripts:'outside-only'});
+    Object.assign(dom.window,{chrome:{runtime:{sendMessage}}});
+    dom.window.eval(setupJs);
+    const document=dom.window.document;
+    await vi.waitFor(()=>expect((document.getElementById('recovery') as HTMLElement).hidden).toBe(false));
+    expect((document.getElementById('cutover') as HTMLElement).hidden).toBe(true);
+    const button=document.getElementById('recover') as HTMLButtonElement;
+    const reviewed=document.getElementById('recoveryReviewed') as HTMLInputElement;
+    const deleted=document.getElementById('manualDeleted') as HTMLInputElement;
+    expect(button.disabled).toBe(true);
+    reviewed.click(); expect(button.disabled).toBe(true);
+    deleted.click(); expect(button.disabled).toBe(false);
+    button.click();
+    await vi.waitFor(()=>expect(sendMessage.mock.calls.some(([message])=>message.type==='clf-task-box-setup:recover-manual-delete')).toBe(true));
+    const recoveryCall=sendMessage.mock.calls.find(([message])=>message.type==='clf-task-box-setup:recover-manual-delete')?.[0];
+    expect(recoveryCall).toEqual({
+      type:'clf-task-box-setup:recover-manual-delete',requestId,generation:14,
+      previousOutcomeReviewed:true,manualProjectDeletionConfirmed:true
+    });
+    await vi.waitFor(()=>expect(sendMessage.mock.calls.filter(([message])=>message.type==='clf-task-box-setup:status')).toHaveLength(2));
+    await vi.waitFor(()=>expect(button.disabled).toBe(false));
+    dom.window.close();
   });
 });

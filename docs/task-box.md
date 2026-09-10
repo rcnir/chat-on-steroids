@@ -117,7 +117,16 @@ Clear ticket. The captured document/dialog/button are revalidated immediately
 after that grant. Revocation is ordered at this preflight; it cannot retroactively
 cancel a native action already authorized and sent.
 
-The setup page is extension-origin only. It cannot release a pending lifecycle.
+The setup page is extension-origin only. It cannot release an arbitrary pending
+lifecycle. Feature 1.0.3 adds one narrow recovery for an exact completed Clear
+whose Project was subsequently deleted by the human: the coordinator must still
+hold the same `deleting` / `kind:clear` / `clearCompleted:true` request and
+generation, its browser Clear attempt must be completed, and the background must
+reconfirm the same app-side completed receipt with a read-only status request.
+The setup action additionally requires explicit human acknowledgement that the
+Project was manually deleted. It then advances only the browser lifecycle to the
+next `open` generation and writes an idempotency receipt; it never replays Clear,
+Project deletion, or recreation. Other reserved/deleting states remain blocked.
 Its old-extension-disabled checkbox is a human acknowledgement, not a claim that
 the extension has permission to inspect or disable another extension.
 

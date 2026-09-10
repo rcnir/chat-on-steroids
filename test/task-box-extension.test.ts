@@ -323,6 +323,202 @@ describe('companion TASK BOX bridge and lifecycle', () => {
     expect(reserve).toMatchObject({ ok: false, error: 'INVALID_CREATE_OWNER' });
     expect(h.storage.data[GLOBAL]).toBeUndefined();
   });
+
+  it('reconciles an exact completed Clear after human-confirmed manual Project deletion without replaying Clear', async () => {
+    const h = makeBackground({
+      [FEATURE]: true,
+      [GLOBAL]: {
+        state: 'deleting', generation: 14, kind: 'clear', requestId: requestOne,
+        owner: { tabId: 17, documentId: 'document-17' }, clearCompleted: true
+      },
+      [`taskBoxClearAttempt:${requestOne}`]: {
+        state: 'completed', generation: 14, requestId: requestOne, kind: 'clear',
+        owner: { tabId: 17, documentId: 'document-17' }
+      }
+    }, async (route) => {
+      if (route.startsWith('/task-box/clear/status?')) {
+        return { ok: true, data: { ok: true, status: 'completed', requestId: requestOne, protocol: PROTOCOL } };
+      }
+      throw new Error(`unexpected ${route}`);
+    });
+
+    const recovery = await h.api.recoverManualDeletion(requestOne, 14);
+    expect(recovery).toMatchObject({ ok: true, recovered: true, state: 'open', generation: 15 });
+    expect(h.storage.data[GLOBAL]).toEqual({ state: 'open', generation: 15 });
+    expect(h.storage.data[`taskBoxClearAttempt:${requestOne}`]).toMatchObject({ state: 'completed', generation: 14 });
+    expect(h.storage.data[`taskBoxManualRecovery:${requestOne}`]).toMatchObject({
+      state: 'completed', requestId: requestOne, fromGeneration: 14, toGeneration: 15,
+      reason: 'human-attested-manual-project-delete'
+    });
+    expect(h.calls.filter((entry) => entry.path === '/task-box/clear')).toHaveLength(0);
+    expect(h.calls.filter((entry) => entry.path.startsWith('/task-box/clear/status?'))).toHaveLength(1);
+
+    const repeated = await h.api.recoverManualDeletion(requestOne, 14);
+    expect(repeated).toMatchObject({ ok: true, recovered: true, alreadyRecovered: true, generation: 15 });
+    expect(h.calls.filter((entry) => entry.path.startsWith('/task-box/clear/status?'))).toHaveLength(1);
+  });
+
+  it('never releases a non-completed or mismatched lifecycle through manual-deletion recovery', async () => {
+    for (const lifecycle of [
+      { state: 'deleting', generation: 14, kind: 'clear', requestId: requestOne,
+        owner: { tabId: 17, documentId: 'document-17' }, clearCompleted: false },
+      { state: 'deleting', generation: 14, kind: 'manual', requestId: requestOne,
+        owner: { tabId: 17, documentId: 'document-17' }, clearCompleted: true },
+      { state: 'reserved', generation: 14, requestId: requestOne,
+        owner: { tabId: 17, documentId: 'document-17' } },
+      { state: 'open', generation: 14 },
+      { state: 'present', generation: 14 }
+    ]) {
+      const h = makeBackground({ [FEATURE]: true, [GLOBAL]: lifecycle });
+      const before = structuredClone(h.storage.data);
+      const result = await h.api.recoverManualDeletion(requestOne, 14);
+      expect(result).toMatchObject({ ok: false, error: 'TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE' });
+      expect(h.storage.data).toEqual(before);
+    }
+  });
+
+  it('requires the exact completed app receipt before releasing a manually deleted Clear lifecycle', async () => {
+    const seed = {
+      [FEATURE]: true,
+      [GLOBAL]: {
+        state: 'deleting', generation: 14, kind: 'clear', requestId: requestOne,
+        owner: { tabId: 17, documentId: 'document-17' }, clearCompleted: true
+      },
+      [`taskBoxClearAttempt:${requestOne}`]: {
+        state: 'completed', generation: 14, requestId: requestOne, kind: 'clear',
+        owner: { tabId: 17, documentId: 'document-17' }
+      }
+    };
+    const h = makeBackground(seed, async (route) => {
+      if (route.startsWith('/task-box/clear/status?')) {
+        return { ok: true, data: { ok: true, status: 'incomplete', requestId: requestOne, protocol: PROTOCOL } };
+      }
+      throw new Error(`unexpected ${route}`);
+    });
+    const result = await h.api.recoverManualDeletion(requestOne, 14);
+    expect(result).toMatchObject({ ok: false, error: 'TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE' });
+    expect(h.storage.data).toEqual(seed);
+    expect(h.calls.filter((entry) => entry.path === '/task-box/clear')).toHaveLength(0);
+  });
+
+  it('does not release a completed Clear when its browser lifecycle changes during app receipt verification', async () => {
+    const seed = {
+      [FEATURE]: true,
+      [GLOBAL]: {
+        state: 'deleting', generation: 14, kind: 'clear', requestId: requestOne,
+        owner: { tabId: 17, documentId: 'document-17' }, clearCompleted: true
+      },
+      [`taskBoxClearAttempt:${requestOne}`]: {
+        state: 'completed', generation: 14, requestId: requestOne, kind: 'clear',
+        owner: { tabId: 17, documentId: 'document-17' }
+      }
+    };
+    let h: ReturnType<typeof makeBackground>;
+    h = makeBackground(seed, async (route) => {
+      if (route.startsWith('/task-box/clear/status?')) {
+        await h.storage.local.set({ [GLOBAL]: { state: 'present', generation: 14 } });
+        return { ok: true, data: { ok: true, status: 'completed', requestId: requestOne, protocol: PROTOCOL } };
+      }
+      throw new Error(`unexpected ${route}`);
+    });
+    const result = await h.api.recoverManualDeletion(requestOne, 14);
+    expect(result).toMatchObject({ ok: false, error: 'TASK_BOX_STATE_CHANGED' });
+    expect(h.storage.data[GLOBAL]).toEqual({ state: 'present', generation: 14 });
+    expect(h.storage.data[`taskBoxManualRecovery:${requestOne}`]).toBeUndefined();
+    expect(h.calls.filter((entry) => entry.path === '/task-box/clear')).toHaveLength(0);
+  });
+
+  it('binds manual-deletion recovery to the exact request and generation', async () => {
+    const seed = {
+      [FEATURE]: true,
+      [GLOBAL]: {
+        state: 'deleting', generation: 14, kind: 'clear', requestId: requestOne,
+        owner: { tabId: 17, documentId: 'document-17' }, clearCompleted: true
+      },
+      [`taskBoxClearAttempt:${requestOne}`]: {
+        state: 'completed', generation: 14, requestId: requestOne, kind: 'clear',
+        owner: { tabId: 17, documentId: 'document-17' }
+      }
+    };
+    for (const [requestId, generation] of [[requestNew, 14], [requestOne, 13], [requestOne, 15]] as const) {
+      const h = makeBackground(seed);
+      const result = await h.api.recoverManualDeletion(requestId, generation);
+      expect(result).toMatchObject({ ok: false, error: 'TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE' });
+      expect(h.storage.data).toEqual(seed);
+      expect(h.calls).toHaveLength(0);
+    }
+  });
+
+  it('requires the browser completed-attempt fence and an enabled feature before app receipt lookup', async () => {
+    const lifecycle = {
+      state: 'deleting', generation: 14, kind: 'clear', requestId: requestOne,
+      owner: { tabId: 17, documentId: 'document-17' }, clearCompleted: true
+    };
+    const missingAttempt = makeBackground({ [FEATURE]: true, [GLOBAL]: lifecycle });
+    expect(await missingAttempt.api.recoverManualDeletion(requestOne, 14))
+      .toMatchObject({ ok: false, error: 'TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE' });
+    expect(missingAttempt.calls).toHaveLength(0);
+
+    const disabled = makeBackground({
+      [FEATURE]: false,
+      [GLOBAL]: lifecycle,
+      [`taskBoxClearAttempt:${requestOne}`]: {
+        state: 'completed', generation: 14, requestId: requestOne, kind: 'clear',
+        owner: { tabId: 17, documentId: 'document-17' }
+      }
+    });
+    expect(await disabled.api.recoverManualDeletion(requestOne, 14))
+      .toMatchObject({ ok: false, error: 'TASK_BOX_DISABLED' });
+    expect(disabled.calls).toHaveLength(0);
+  });
+
+  it('rejects a completed app status for any request other than the bound Clear', async () => {
+    const seed = {
+      [FEATURE]: true,
+      [GLOBAL]: {
+        state: 'deleting', generation: 14, kind: 'clear', requestId: requestOne,
+        owner: { tabId: 17, documentId: 'document-17' }, clearCompleted: true
+      },
+      [`taskBoxClearAttempt:${requestOne}`]: {
+        state: 'completed', generation: 14, requestId: requestOne, kind: 'clear',
+        owner: { tabId: 17, documentId: 'document-17' }
+      }
+    };
+    const h = makeBackground(seed, async (route) => {
+      if (route.startsWith('/task-box/clear/status?')) {
+        return { ok: true, data: { ok: true, status: 'completed', requestId: requestNew, protocol: PROTOCOL } };
+      }
+      throw new Error(`unexpected ${route}`);
+    });
+    expect(await h.api.recoverManualDeletion(requestOne, 14))
+      .toMatchObject({ ok: false, error: 'TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE' });
+    expect(h.storage.data).toEqual(seed);
+    expect(h.calls.filter((entry) => entry.path === '/task-box/clear')).toHaveLength(0);
+  });
+
+  it('never overwrites an existing conflicting manual-recovery receipt', async () => {
+    const recoveryKey = `taskBoxManualRecovery:${requestOne}`;
+    const seed = {
+      [FEATURE]: true,
+      [GLOBAL]: {
+        state: 'deleting', generation: 14, kind: 'clear', requestId: requestOne,
+        owner: { tabId: 17, documentId: 'document-17' }, clearCompleted: true
+      },
+      [`taskBoxClearAttempt:${requestOne}`]: {
+        state: 'completed', generation: 14, requestId: requestOne, kind: 'clear',
+        owner: { tabId: 17, documentId: 'document-17' }
+      },
+      [recoveryKey]: {
+        state: 'pending', requestId: requestOne, fromGeneration: 14, toGeneration: 15,
+        reason: 'human-attested-manual-project-delete'
+      }
+    };
+    const h = makeBackground(seed);
+    expect(await h.api.recoverManualDeletion(requestOne, 14))
+      .toMatchObject({ ok: false, error: 'TASK_BOX_MANUAL_RECOVERY_NOT_AVAILABLE' });
+    expect(h.storage.data).toEqual(seed);
+    expect(h.calls).toHaveLength(0);
+  });
 });
 
 describe('companion TASK BOX page behavior', () => {

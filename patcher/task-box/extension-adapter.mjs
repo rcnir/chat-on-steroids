@@ -156,7 +156,30 @@ async function taskBoxSetup(message,sender) {
       (sender.frameId !== undefined && sender.frameId !== 0)) return {ok:false,error:'invalid_setup_owner'};
   const state=await chrome.storage.local.get(['taskBoxIntegrationEnabled','taskBoxCreationGlobal','taskBoxCutoverReceipt']);
   const lifecycle=state.taskBoxCreationGlobal;
-  if (lifecycle !== undefined && !['open','present'].includes(lifecycle?.state)) return {ok:false,error:'TASK_BOX_LIFECYCLE_BLOCKED'};
+
+  if (message.type === 'clf-task-box-setup:recover-manual-delete') {
+    if (message.previousOutcomeReviewed !== true || message.manualProjectDeletionConfirmed !== true ||
+        typeof message.requestId !== 'string' || !Number.isInteger(message.generation) || message.generation < 0) {
+      return {ok:false,error:'TASK_BOX_MANUAL_RECOVERY_CONFIRMATION_REQUIRED'};
+    }
+    return taskBox.recoverManualDeletion(message.requestId,message.generation);
+  }
+
+  if (lifecycle !== undefined && !['open','present'].includes(lifecycle?.state)) {
+    if (message.type !== 'clf-task-box-setup:status' || lifecycle?.state !== 'deleting' || lifecycle.kind !== 'clear' ||
+        lifecycle.clearCompleted !== true || typeof lifecycle.requestId !== 'string' ||
+        !Number.isInteger(lifecycle.generation) || lifecycle.generation < 0) {
+      return {ok:false,error:'TASK_BOX_LIFECYCLE_BLOCKED'};
+    }
+    const recovery=await taskBox.manualDeletionRecoveryStatus(lifecycle.requestId,lifecycle.generation);
+    if (recovery?.ok !== true || recovery.recoveryRequired !== true ||
+        recovery.requestId !== lifecycle.requestId || recovery.generation !== lifecycle.generation) {
+      return {ok:false,error:'TASK_BOX_LIFECYCLE_BLOCKED'};
+    }
+    return {ok:true,available:true,enabled:state.taskBoxIntegrationEnabled === true,recoveryRequired:true,
+      recoveryRequestId:recovery.requestId,recoveryGeneration:recovery.generation,error:null};
+  }
+
   const capability=await call('/task-box/capabilities');
   const available=capability?.ok === true && capability.data?.protocol === TASK_BOX_CONTRACT.protocol && capability.data.supported === true &&
     capability.data.atMostOnce === true && capability.data.durableReceipts === true;

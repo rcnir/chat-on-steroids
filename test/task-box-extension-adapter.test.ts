@@ -46,6 +46,10 @@ describe('TASK BOX official background composer', () => {
     expect(output).toContain('featureVersion:"task-box-1.0.0"');
     expect(output).toContain("chrome.runtime.getURL('task-box-setup.html')");
     expect(output).toContain("call('/task-box/capabilities')");
+    expect(output).toContain("message.type === 'clf-task-box-setup:recover-manual-delete'");
+    expect(output).toContain('message.manualProjectDeletionConfirmed !== true');
+    expect(output).toContain('taskBox.manualDeletionRecoveryStatus(');
+    expect(output).toContain('taskBox.recoverManualDeletion(');
     expect(output).toContain("files:['task-box-compatibility.js','task-box-core.js','task-box.js']");
     expect(output.match(/await restoreTaskBoxTab\(id\);/g)).toHaveLength(2);
 
