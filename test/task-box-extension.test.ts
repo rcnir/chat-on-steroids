@@ -86,8 +86,19 @@ function makeBackground(seed: Record<string, unknown> = {}, bridge?: (...args: a
   const registered = box.CLFTaskBoxBackground.registerTaskBox({ chrome, call });
   const api = {
     ...registered,
-    handle(message: any, owner: any, assertCurrent: () => boolean = () => true) {
-      return registered.handle(message, owner, assertCurrent);
+    handle(
+      message: any,
+      owner: any,
+      assertCurrent: () => boolean = () => true,
+      currentConversation: () => string | null | Promise<string | null> = () => {
+        try {
+          return new URL(owner?.url || '').pathname.match(/^\/(?:g\/[^/]+\/)?c\/([^/]+)\/?$/)?.[1] || null;
+        } catch {
+          return null;
+        }
+      }
+    ) {
+      return registered.handle(message, owner, assertCurrent, currentConversation);
     }
   };
   return { storage, calls, chrome, api, coordinator: box.CLFTaskBoxCoordinator };
@@ -289,6 +300,28 @@ describe('companion TASK BOX bridge and lifecycle', () => {
       conversationId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
     }, otherSender);
     expect(other).toMatchObject({ ok: false, error: 'TASK_BOX_GLOBAL_NOT_OPEN' });
+  });
+
+  it('uses the companion current-tab conversation authority when MessageSender.url is transiently id-less', async () => {
+    const h = makeBackground({ [FEATURE]: true });
+    const transientSender = { ...sender, url: 'https://chatgpt.com/' };
+    const reserve = await h.api.handle({
+      type: 'clf-task-box:reserve-create', protocol: PROTOCOL, requestId: requestCreateOne, conversationId
+    }, transientSender, () => true, () => conversationId);
+    expect(reserve).toMatchObject({ ok: true, reserved: true });
+    expect(h.storage.data[GLOBAL]).toMatchObject({
+      state: 'reserved', conversationId, owner: { tabId: 17, documentId: 'document-17' }
+    });
+  });
+
+  it('rejects reserve-create when the current tab has navigated to a different conversation even if MessageSender.url is stale', async () => {
+    const h = makeBackground({ [FEATURE]: true });
+    const currentConversation = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const reserve = await h.api.handle({
+      type: 'clf-task-box:reserve-create', protocol: PROTOCOL, requestId: requestCreateOne, conversationId
+    }, sender, () => true, () => currentConversation);
+    expect(reserve).toMatchObject({ ok: false, error: 'INVALID_CREATE_OWNER' });
+    expect(h.storage.data[GLOBAL]).toBeUndefined();
   });
 });
 

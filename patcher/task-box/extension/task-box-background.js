@@ -25,7 +25,7 @@
       if (url.origin !== 'https://chatgpt.com' || sender?.frameId !== 0 ||
           !Number.isInteger(sender?.tab?.id) || sender.tab.id < 0 ||
           typeof sender?.documentId !== 'string' || !sender.documentId) return null;
-      return {owner:{tabId:sender.tab.id,documentId:sender.documentId},url};
+      return {tabId:sender.tab.id,documentId:sender.documentId};
     }
 
     async function enabled() {
@@ -124,15 +124,14 @@
       return statusOnly(owner,requestId,begun.ticket,assertCurrent);
     }
 
-    async function handle(message,sender,assertCurrent) {
+    async function handle(message,sender,assertCurrent,currentConversation) {
       if (!handles(message?.type)) return reply({ok:false,error:'TASK_BOX_MESSAGE_NOT_HANDLED'});
       if (message.protocol !== PROTOCOL) return reply({ok:false,error:'TASK_BOX_PROTOCOL_MISMATCH'});
-      const verified = ownerFor(sender);
-      if (!verified) return reply({ok:false,error:'INVALID_TASK_BOX_OWNER'});
+      const owner = ownerFor(sender);
+      if (!owner) return reply({ok:false,error:'INVALID_TASK_BOX_OWNER'});
       if (typeof assertCurrent !== 'function') return reply({ok:false,error:'TASK_BOX_DOCUMENT_GUARD_REQUIRED'});
       if (!(await enabled())) return reply({ok:false,error:'TASK_BOX_DISABLED'});
       if (!currentDocument(assertCurrent)) return staleDocument();
-      const {owner,url} = verified;
       const action = message.type.slice(PREFIX.length);
 
       if (action === 'probe') {
@@ -174,11 +173,17 @@
       if (action === 'begin-manual-delete') return reply(await coordinator.beginDeletion(owner,message.requestId,'manual'));
       if (action === 'reserve-create') {
         const conversationId = message.conversationId;
-        const route = url.pathname.match(/^\/(?:g\/[^/]+\/)?c\/([^/]+)\/?$/);
-        if (typeof conversationId !== 'string' || !CONVERSATION_ID.test(conversationId) || route?.[1] !== conversationId) {
+        if (typeof conversationId !== 'string' || !CONVERSATION_ID.test(conversationId) || typeof currentConversation !== 'function') {
           return reply({ok:false,error:'INVALID_CREATE_OWNER'});
         }
+        // MessageSender.url can lag or become temporarily id-less during ChatGPT SPA/reload
+        // transitions. The companion background already owns the authoritative current-tab
+        // conversation arbitration; reserve-create must consume that one fact rather than
+        // re-implementing route identity here.
+        let currentConversationId = null;
+        try { currentConversationId = await currentConversation(); } catch {}
         if (!currentDocument(assertCurrent)) return staleDocument();
+        if (currentConversationId !== conversationId) return reply({ok:false,error:'INVALID_CREATE_OWNER'});
         return reply(await coordinator.reserveWorker(owner,message.requestId,conversationId));
       }
       return reply({ok:false,error:'TASK_BOX_UNKNOWN_ACTION'});

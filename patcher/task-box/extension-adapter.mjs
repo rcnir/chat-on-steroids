@@ -71,6 +71,17 @@ const SERIALIZE_TAB_CONTRACT = `function serializeTab(tab, operation) {
   return tracked;
 }`;
 
+const CONVERSATION_FOR_TAB_CONTRACT = `function conversationForTab(tab) {
+  if (!tab || typeof tab.id !== 'number') return null;
+  const current = conversationFromUrl(tab.url);
+  if (current) return current;
+  const pending = conversationFromUrl(tab.pendingUrl);
+  if (pending) return pending;
+  const urls = [tab.url, tab.pendingUrl].filter((value) => typeof value === 'string' && value);
+  if (urls.some((value) => !isChatGptUrl(value))) return null;
+  return cleanConversationId(tabConversations[String(tab.id)]);
+}`;
+
 function fail(reason) {
   throw new Error(`TASK_BOX_EXTENSION_ADAPTER_${reason}`);
 }
@@ -118,6 +129,7 @@ function validateContract(source, appVersion) {
   requireUnique(source, AUTHORIZE_DOCUMENT_CONTRACT, 'DOCUMENT_GUARD_DRIFT');
   requireUnique(source, OWNS_DOCUMENT_CONTRACT, 'DOCUMENT_GUARD_DRIFT');
   requireUnique(source, SERIALIZE_TAB_CONTRACT, 'DOCUMENT_GUARD_DRIFT');
+  requireUnique(source, CONVERSATION_FOR_TAB_CONTRACT, 'CONVERSATION_GUARD_DRIFT');
 
   requireUnique(source, LISTENER_SEAM, 'MESSAGE_LISTENER_SEAM_DRIFT');
   requireUnique(source, HEALTHY_RESTORE_SEAM, 'HEALTHY_RESTORE_SEAM_DRIFT');
@@ -185,7 +197,16 @@ function dispatchBlock() {
       // Reuse the official registry epoch while Chrome document identity remains authoritative.
       const source=await authorizeDocument(sender,{navigationEpoch:tabEpochs[String(tabId(sender))] ?? 0});
       if (!source.ok || !ownsDocument(source)) return {ok:false,protocol:taskBox.protocol,error:source.error || 'stale_document'};
-      const reply=await taskBox.handle(message,sender,()=>ownsDocument(source));
+      // TASK BOX does not own a second conversation registry. Resolve action-time identity through
+      // the companion's existing current-tab arbitration, including its root/id-less fallback.
+      const currentConversation=async()=>{
+        if (!ownsDocument(source)) return null;
+        let tab;
+        try { tab=await chrome.tabs.get(source.tab); } catch { return null; }
+        if (!ownsDocument(source)) return null;
+        return conversationForTab(tab);
+      };
+      const reply=await taskBox.handle(message,sender,()=>ownsDocument(source),currentConversation);
       if (!ownsDocument(source)) return {ok:false,protocol:taskBox.protocol,error:'stale_document'};
       return reply;
     }).then(sendResponse, error =>

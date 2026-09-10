@@ -18,7 +18,7 @@
 | TASK BOX 機能 | `patcher/task-box/feature.json` の `featureVersion` | Project 操作・Clear 連携・不具合修正の版。本体と独立して更新する |
 | 接続契約 | 同ファイルの `protocol`、`adapterRevision`、`releases` | TASK BOX protocol、DOM adapter、検証済みの本体・companion の組み合わせ |
 
-現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.0`、TASK BOX protocol は `1`、作成ダイアログ修正は adapter revision `2` です。
+現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.1`、TASK BOX protocol は `1`、作成ダイアログ修正は adapter revision `2` です。
 
 ## ソースの配置
 
@@ -208,3 +208,11 @@ fresh workerを1件だけ起動しました。最初の自動移動はChatGPTの
 既存3件のClear完了receiptは、更新前・起動確認後・受け入れ終了時でファイルhashが一致しています。機能有効化設定と過去のcleanup完了記録も保持し、Clear・Project削除・Project再作成は行っていません。旧2.0.7本体の切り戻しコピーも元のfingerprintと一致します。
 
 検証用の一時拡張ファイル10個と診断タブは撤去済みです。終了時に、本体・stable companion・機能fingerprintがそれぞれ検証済み候補／updater構成と一致することを確認しました。**2.0.8への本番反映、状態保持、案内ダイアログを閉じた後の自動移動と移動後応答を確認済みです。2.0.8での破壊的なBOX CLEAR通しテストは再実行していません。** 事前の202件の関連テストや旧版の削除テストを、その代わりの実機PASSとして扱いません。
+
+## TASK BOX 1.0.1 — `INVALID_CREATE_OWNER` 修正 / 2026-09-11
+
+fresh worker の自動移動で、Project作成予約の直前に `INVALID_CREATE_OWNER` で停止する事象を確認しました。失敗した要求の conversation id 自体と Chrome document owner は有効で、旧実装が `reserve-create` 時だけ `MessageSender.url` を独自に `/c/<id>` と再照合していたことが原因でした。ChatGPT のSPA遷移やreload中は `MessageSender.url` が一時的にroot/id-lessになり得る一方、公式 companion は既に `authorizeDocument()` / `ownsDocument()` と `conversationForTab()` / `tabConversations` でcurrent-tab identityを所有しています。
+
+1.0.1では、TASK BOX側のconversation route再実装を削除し、既に認証済みのcurrent documentから `chrome.tabs.get()` でaction-time tabを読み、公式 `conversationForTab()` の結果と要求 conversation id を一致確認してからのみ作成予約します。具体的な別会話URLはregistryより優先されるため、古い `MessageSender.url` を根拠に別会話へ予約することも拒否します。2.0.6・2.0.7・2.0.8でこの公式conversation arbitration契約が同一であることをadapterのfail-closed contractとして固定しています。
+
+回帰テストは、(1) `MessageSender.url` がChatGPT rootでも公式current-tab identityが対象workerなら予約できること、(2) `MessageSender.url` が対象workerの古い値でも実タブが別会話なら拒否すること、の両方向を追加しました。機能版のみ `1.0.1` へ上げ、TASK BOX protocol `1` とadapter revision `2` は変更していません。**この記録時点ではソース／非GUI検証段階であり、稼働中2.0.8への反映・Chrome companion再読み込み・fresh worker実機再確認はまだ行っていません。** 既存の未完了BOX CLEAR lifecycleを更新で初期化したり、再実行したりしません。

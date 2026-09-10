@@ -73,12 +73,18 @@ describe('TASK BOX official background composer', () => {
     const dispatch = injectedBlocks(output).slice(injectedBlocks(output).indexOf("if (typeof message?.type"));
     const authorize = dispatch.indexOf('await authorizeDocument(');
     const before = dispatch.indexOf('!source.ok || !ownsDocument(source)', authorize);
-    const handle = dispatch.indexOf('await taskBox.handle(', before);
+    const resolver = dispatch.indexOf('const currentConversation=async()=>{', before);
+    const tabRead = dispatch.indexOf('await chrome.tabs.get(source.tab)', resolver);
+    const conversation = dispatch.indexOf('conversationForTab(tab)', tabRead);
+    const handle = dispatch.indexOf('await taskBox.handle(', conversation);
     const callbackGuard = dispatch.indexOf('()=>ownsDocument(source)', handle);
     const after = dispatch.indexOf("if (!ownsDocument(source))", callbackGuard);
     expect(authorize).toBeGreaterThanOrEqual(0);
     expect(before).toBeGreaterThan(authorize);
-    expect(handle).toBeGreaterThan(before);
+    expect(resolver).toBeGreaterThan(before);
+    expect(tabRead).toBeGreaterThan(resolver);
+    expect(conversation).toBeGreaterThan(tabRead);
+    expect(handle).toBeGreaterThan(conversation);
     expect(callbackGuard).toBeGreaterThan(handle);
     expect(after).toBeGreaterThan(callbackGuard);
     expect(dispatch).toContain('serializeTab(tabId(sender),async () => {');
@@ -123,6 +129,10 @@ describe('TASK BOX official background composer', () => {
       'const current = prior.then(operation, operation);',
       'const current = prior.then(operation);'
     ))).toThrow(/DOCUMENT_GUARD_DRIFT/);
+    expect(() => compose(appVersion, source.replace(
+      'const current = conversationFromUrl(tab.url);',
+      'const current = conversationFromUrl(tab.pendingUrl);'
+    ))).toThrow(/CONVERSATION_GUARD_DRIFT/);
   });
 
   it('binds appVersion to its compatibility contract instead of rewriting official literals', () => {
