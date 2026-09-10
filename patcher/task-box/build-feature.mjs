@@ -11,7 +11,7 @@ export const extensionFiles = Object.freeze([
 ]);
 const inputFiles = [
   'feature.json', 'main-adapter.mjs', 'extension-adapter.mjs', 'loader.cjs', 'package.mjs',
-  '../../scripts/rocaniiru-task-box-package.mjs', '../../package-lock.json',
+  '../../scripts/rocaniiru-task-box-package.mjs', '../../scripts/macos-local-signing.mjs', '../../package-lock.json',
   'runtime/clear-service.ts', 'runtime/index.cjs', 'build-feature.mjs',
   ...extensionFiles.map(file => `extension/${file}`)
 ];

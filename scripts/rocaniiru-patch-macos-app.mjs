@@ -14,6 +14,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { signMacOSBundle } from './macos-local-signing.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '..');
@@ -91,8 +92,7 @@ function replaceExtension(bundle) {
 }
 
 function sealAndVerify(bundle) {
-  run('codesign', ['--force', '--deep', '--sign', '-', bundle]);
-  run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', bundle]);
+  signMacOSBundle(bundle);
 }
 
 function bundleArch(bundle) {

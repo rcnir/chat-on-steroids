@@ -8,6 +8,7 @@ import { feature, releaseFor, composeMain, sha256 } from './main-adapter.mjs';
 import { composeBackground } from './extension-adapter.mjs';
 import { buildFeature, featureFingerprint } from './build-feature.mjs';
 import { fingerprintTree, rebuildAsarWithMain, buildDescriptor, applyCandidate } from '../../scripts/rocaniiru-task-box-package.mjs';
+import { signMacOSBundle } from '../../scripts/macos-local-signing.mjs';
 
 const asar = asarImport?.default ?? asarImport;
 const plist = plistImport?.default ?? plistImport;
@@ -132,8 +133,7 @@ export async function prepareAddon({ appPath, outputRoot, baseDescriptorPath }) 
   } };
   const infoFile = path.join(candidate, 'Contents/Info.plist');
   writeFileSync(infoFile, plist.build(info));
-  run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', candidate]);
-  run('/usr/bin/codesign', ['--verify', '--deep', '--strict', candidate]);
+  signMacOSBundle(candidate);
   if (fingerprintTree(source.app) !== baseline || featureBefore !== featureFingerprint() || built.featureFingerprint !== featureBefore) {
     throw new Error('TASK_BOX_PACKAGE_INPUT_CHANGED');
   }

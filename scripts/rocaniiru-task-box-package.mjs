@@ -22,6 +22,7 @@ import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import asarImport from '@electron/asar';
 import plistImport from 'plist';
+import { signMacOSBundle } from './macos-local-signing.mjs';
 
 const asar = asarImport?.default ?? asarImport;
 const plist = plistImport?.default ?? plistImport;
@@ -366,8 +367,7 @@ function run(command, argv) {
 }
 
 function codesignCandidate(candidate) {
-  run('codesign', ['--force', '--deep', '--sign', '-', candidate]);
-  run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', candidate]);
+  signMacOSBundle(candidate);
 }
 
 function verifyCandidateSignature(candidate) {

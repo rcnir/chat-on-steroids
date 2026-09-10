@@ -18,7 +18,7 @@
 | TASK BOX 機能 | `patcher/task-box/feature.json` の `featureVersion` | Project 操作・Clear 連携・不具合修正の版。本体と独立して更新する |
 | 接続契約 | 同ファイルの `protocol`、`adapterRevision`、`releases` | TASK BOX protocol、DOM adapter、検証済みの本体・companion の組み合わせ |
 
-現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.3`、TASK BOX protocol は `1`、DOM adapter revision は `3` です。
+現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.4`、TASK BOX protocol は `1`、DOM adapter revision は `3` です。
 
 ## ソースの配置
 
@@ -70,7 +70,7 @@ feature/                  独立して生成した機能ペイロード
 composed-main.js           公式 main に接続部分だけを追加した内容
 ```
 
-公式アプリの main 以外の ASAR 内容、native module、署名sidecar等を、無関係なソースビルドで置き換えません。app.asar.unpacked は既存の保存ロジックを使用し、生成した部分木で丸ごと置換しません。候補だけを ad-hoc seal / verify します。これは配布元の公的な署名・notarizationを意味しません。
+公式アプリの main 以外の ASAR 内容、native module、署名sidecar等を、無関係なソースビルドで置き換えません。app.asar.unpacked は既存の保存ロジックを使用し、生成した部分木で丸ごと置換しません。通常の配布検証環境では候補を ad-hoc seal / verify します。一方、利用Macに `~/Library/Application Support/chat-on-steroids/macos-code-signing.json` がある場合は、そこに固定したKeychain identityで候補全体を署名し、Designated Requirementがそのcertificate rootへ結びついたことまで検証します。設定済みidentityがKeychainから失われた場合はad-hocへ戻さずfail-closedします。これはApple Developer IDやnotarizationを意味せず、そのMac上でTCC identityを更新間で安定させるためのローカル署名です。
 
 独立版は、照合済み公式 main と companion の元データを、候補内の `Resources/rocaniiru-task-box/original/` に保存します。次回の同一本体版での機能更新も、この元データから再構成します。そこにユーザー情報や秘密情報は保存しません。旧統合版のようにこの元データを持たない改造本体からは推測して作らず、公式配布物を使用します。
 
@@ -236,3 +236,11 @@ recoveryは一般的な `reserved` / `deleting` 解放APIではありません�
 この変更はcontent DOM adapter `task-box.js` を変更しないため、機能版のみ `1.0.3` へ上げ、TASK BOX protocol `1` / adapter revision `3` は維持します。**この記録時点ではソース実装と非GUI検証の段階であり、稼働中2.0.8への反映・既存generation 14の実機recovery・fresh workerによる再作成確認はまだ行っていません。** controlled activation前に既存browser/app receiptを保持し、同じClearやProject削除を再送してはいけません。
 
 1.0.3のfocused recovery/adapter検証は **45/45成功**、TASK BOX・updater隣接検証は **105成功・4スキップ**、typecheck・`git diff --check`・production buildは成功しました。full `npm run verify` は **2,963成功・104スキップ・1失敗**で、唯一の失敗は従来からのbundled ripgrep PATH選択（期待する `resources/rg/rg` ではなく `/opt/homebrew/bin/rg`）です。verifyがそこで終了するため `test/mcp-shutdown.test.ts` は単独で **2/2成功**を確認しました。この既知baseline failureは1.0.3のTASK BOX変更として修正・抑制していません。
+
+## TASK BOX 1.0.4 — macOS TCC identity安定化 / 2026-09-11
+
+`Screen Recording` と `Accessibility` がTASK BOX本体差し替え後に毎回missingへ戻る原因を、稼働中 `/Applications/Chat On Steroids.app` のcode signatureから確認しました。従来candidateは `codesign --force --deep --sign -` でad-hoc再署名しており、Designated Requirementが `cdhash` だけに結びついていました。そのためASARやcompanionを変更して再署名するたびにcdhashが変わり、macOS TCCからは前回許可したappとは別identityになっていました。通常の終了・起動だけではbundleを変更していません。
+
+1.0.4では公式releaseのunsigned/ad-hoc配布方針は変更しません。ROCANIIRUのmacOS候補作成だけに `scripts/macos-local-signing.mjs` を置き、利用Macの `macos-code-signing.json` が存在する場合はKeychain上の固定code-signing identityで候補全体を署名します。設定済みidentityが見つからない場合はad-hocへ暗黙fallbackせず候補作成を拒否します。自己署名identityはDeveloper IDやnotarizationの代替ではなく、同一Mac上で `identifier + certificate root` のDesignated Requirementを維持するためだけのものです。private keyはKeychain外へ保存しません。
+
+この変更ではTASK BOX protocol `1` / DOM adapter revision `3`、Clear処理、Project lifecycle、保存状態を変更しません。署名identityをad-hocから固定certificateへ一度だけ移すため、切替直後のmacOS権限は利用者が最後に1回再承認する必要があります。その後は同じKeychain identityで署名されるTASK BOX更新ではDesignated Requirementが維持され、更新ごとの削除→再追加を要求しないことを実機で確認して閉じます。
