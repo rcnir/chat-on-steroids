@@ -18,7 +18,7 @@
 | TASK BOX 機能 | `patcher/task-box/feature.json` の `featureVersion` | Project 操作・Clear 連携・不具合修正の版。本体と独立して更新する |
 | 接続契約 | 同ファイルの `protocol`、`adapterRevision`、`releases` | TASK BOX protocol、DOM adapter、検証済みの本体・companion の組み合わせ |
 
-現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.1`、TASK BOX protocol は `1`、作成ダイアログ修正は adapter revision `2` です。
+現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.2`、TASK BOX protocol は `1`、DOM adapter revision は `3` です。
 
 ## ソースの配置
 
@@ -216,3 +216,11 @@ fresh worker の自動移動で、Project作成予約の直前に `INVALID_CREAT
 1.0.1では、TASK BOX側のconversation route再実装を削除し、既に認証済みのcurrent documentから `chrome.tabs.get()` でaction-time tabを読み、公式 `conversationForTab()` の結果と要求 conversation id を一致確認してからのみ作成予約します。具体的な別会話URLはregistryより優先されるため、古い `MessageSender.url` を根拠に別会話へ予約することも拒否します。2.0.6・2.0.7・2.0.8でこの公式conversation arbitration契約が同一であることをadapterのfail-closed contractとして固定しています。
 
 回帰テストは、(1) `MessageSender.url` がChatGPT rootでも公式current-tab identityが対象workerなら予約できること、(2) `MessageSender.url` が対象workerの古い値でも実タブが別会話なら拒否すること、の両方向を追加しました。機能版のみ `1.0.1` へ上げ、TASK BOX protocol `1` とadapter revision `2` は変更していません。**この記録時点ではソース／非GUI検証段階であり、稼働中2.0.8への反映・Chrome companion再読み込み・fresh worker実機再確認はまだ行っていません。** 既存の未完了BOX CLEAR lifecycleを更新で初期化したり、再実行したりしません。
+
+## TASK BOX 1.0.2 — native削除確認 / `UI_BUSY` retry 修正 / 2026-09-11
+
+同じ実機記録では、`INVALID_CREATE_OWNER` より前のBOX CLEAR `2c772e6c-aae4-4567-bfd1-83a7bc833ea7` が、app側Clear完了後のProject削除で `DELETE_PROJECT_CONFIRM_NOT_FOUND` に停止していました。content adapterには既にProject作成用の `openProjectDialogs()` があり、ARIA dialogだけでなくnative `dialog[open]` も正しく扱いますが、Project削除確認とmanual-delete観測だけが古い `[role="dialog"]` の独自探索を残していました。失敗時の実DOM snapshot自体は保存されていないため「その実機dialogがnativeだった」とは断定しませんが、この分裂は同じエラーを再現するcode-level defectです。1.0.2では削除確認も同じ `openProjectDialogs()` authorityへ統合し、native delete-confirmの回帰を追加しました。
+
+後続の `UI_BUSY` は、ユーザーがProject UIを操作中なら安全に停止すべき状態です。一方、旧 `schedule()` はcatchが設定した `800 / 1800 / 4000 / 8000 ms` のretry待ちを、`pointerover`・focus・MutationObserverの `schedule(0 / 180)` で短縮できました。実ログでも同じworkerが約0.34秒内に4回 `UI_BUSY` を消費しています。1.0.2ではretryのnot-before時刻を持ち、通常のDOMイベントはその時刻を前倒しできないようにしました。また4本目の `8000 ms` が旧 `MAX_MOVE_ATTEMPTS` のoff-by-oneで到達不能だったため、初回＋4 retryの5試行に修正しています。retry対象は従来どおり、target/createをまだ送っていないdiscovery failureだけです。無制限retryにはしていません。
+
+このDOM adapter変更に伴いadapter revisionを `3` に上げています。既存rev2 runtimeは新しいrev3が注入されたときにhealthy incumbentとして残らず、既存のtakeover境界で停止・置換されます。TASK BOX protocolは `1` のままです。**既存の実機lifecycle `deleting` はこのコード更新だけでは解消しません。過去の未完了削除を「完了」に書き換えたり、同じClearを再送したりすることは禁止したままです。**

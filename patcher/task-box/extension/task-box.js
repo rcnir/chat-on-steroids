@@ -4,7 +4,7 @@
   const C = globalThis.CLFTaskBoxCore;
   if (!C) return;
   const PROTOCOL = 1;
-  const ADAPTER_REVISION = 2;
+  const ADAPTER_REVISION = 3;
   const COMPANION_VERSION = globalThis.CLFTaskBoxCompatibility?.appVersion;
   const FEATURE_KEY = 'taskBoxIntegrationEnabled';
 
@@ -25,7 +25,7 @@
   ];
   const HISTORY_OPTIONS_SELECTOR = 'button[data-testid^="history-item-"][data-testid$="-options"]';
   const MOVE_RETRY_MS = [800, 1800, 4000, 8000];
-  const MAX_MOVE_ATTEMPTS = MOVE_RETRY_MS.length;
+  const MAX_MOVE_ATTEMPTS = MOVE_RETRY_MS.length + 1;
   const BOX_CLEAR_LABEL = 'BOX CLEAR';
   const PROJECT_OPTIONS_LABELS = ['Open project options for TASK BOX', 'TASK BOX のプロジェクトオプションを開く'];
   const BOX_CLEAR_MENU_TTL_MS = 2500;
@@ -37,6 +37,7 @@
   let moveAttempts = 0;
   let moving = false;
   let scheduled = null;
+  let moveRetryNotBefore = 0;
   let cleanupRunning = false;
   let pendingBoxClearMenu = null;
   let lastMoveStage = null;
@@ -433,8 +434,8 @@
         return watch;
       }
       if (Date.now() > watch.confirmDeadline) throw new Error('MANUAL_DELETE_DIALOG_TIMEOUT');
-      const dialogs = [...document.querySelectorAll('[role="dialog"]')]
-        .filter(dialog => !watch.priorDialogs.has(dialog) && visible(dialog));
+      const dialogs = openProjectDialogs()
+        .filter(dialog => !watch.priorDialogs.has(dialog));
       if (dialogs.length > 1) throw new Error('MANUAL_DELETE_DIALOG_AMBIGUOUS');
       if (dialogs.length === 1) {
         const buttons = allInteractive(dialogs[0]).filter(button => visible(button) &&
@@ -469,7 +470,7 @@
         const menu = target.closest('[role="menu"]');
         if (menu && menu === watch.menu && isNativeProjectMenu(menu) && matchesLabel(target,DELETE_PROJECT_LABELS,true)) {
           watch.phase = 'confirm';
-          watch.priorDialogs = new Set(document.querySelectorAll('[role="dialog"]'));
+          watch.priorDialogs = new Set(openProjectDialogs());
           watch.confirmDeadline = Date.now() + 5000;
         } else nativeDeleteWatch = null;
         return;
@@ -1152,7 +1153,7 @@
     if (deleteItems.length !== 1) throw new Error('DELETE_PROJECT_CONTROL_NOT_FOUND');
     const deleteItem = deleteItems[0];
 
-    const priorDialogs = new Set(Array.from(document.querySelectorAll('[role="dialog"]')).filter(visible));
+    const priorDialogs = new Set(openProjectDialogs());
     guard.assert(deleteItem);
     if (!menu.contains(deleteItem) || !taskBoxContextIsCurrent(context)) throw new Error('DELETE_PROJECT_CONTEXT_CHANGED');
     await authorizeProjectDelete(ticket);
@@ -1163,8 +1164,8 @@
       guard.assert();
       if (capturedTaskBoxIsGone(context)) throw new Error('DELETE_OUTCOME_UNCONFIRMED_BEFORE_CONFIRM');
       if (!taskBoxContextIsCurrent(context)) return null;
-      const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'))
-        .filter(dialog => visible(dialog) && !priorDialogs.has(dialog));
+      const dialogs = openProjectDialogs()
+        .filter(dialog => !priorDialogs.has(dialog));
       const candidates = dialogs.map(dialog => {
         const buttons = allInteractive(dialog).filter(button =>
           visible(button) && !button.disabled && matchesLabel(button, DELETE_CONFIRM_LABELS, true)
@@ -1289,7 +1290,7 @@
   function schedule(delayMs = 0) {
     if (!ensureExtensionRuntime()) return;
     if (scheduled) clearTimeout(scheduled);
-    scheduled = setTimeout(run, delayMs);
+    scheduled = setTimeout(run, Math.max(0, delayMs));
   }
 
   async function run() {
@@ -1308,13 +1309,23 @@
     if (conversationId !== currentConversationId) {
       currentConversationId = conversationId;
       moveAttempts = 0;
+      moveRetryNotBefore = 0;
     }
     if ((attemptsByConversation.get(conversationId) || 0) >= MAX_MOVE_ATTEMPTS || movedConversations.has(conversationId) || stoppedConversations.has(conversationId)) return;
     if (!isWorkerConversation()) return;
+    // Keep UI/lifecycle maintenance responsive above, but do not let pointer, focus or
+    // MutationObserver activity collapse a worker discovery backoff. Such events may wake
+    // run(), yet the next native move attempt cannot begin before this deadline.
+    if (moveRetryNotBefore > Date.now()) {
+      schedule(moveRetryNotBefore - Date.now());
+      return;
+    }
+    moveRetryNotBefore = 0;
     moving = true;
     try {
       await moveCurrentWorker();
       moveAttempts = 0;
+      moveRetryNotBefore = 0;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await writeMoveDiagnostic({
@@ -1330,7 +1341,11 @@
       const retryable = ['CONVERSATION_OPTIONS_NOT_FOUND', 'MOVE_TO_PROJECT_NOT_FOUND', 'UI_BUSY'].includes(message);
       if (!retryable) stoppedConversations.add(conversationId);
       console.warn('[Chat On Steroids CLEAR] move failed:', error);
-      if (retryable && moveAttempts < MAX_MOVE_ATTEMPTS) schedule(MOVE_RETRY_MS[moveAttempts - 1]);
+      if (retryable && moveAttempts < MAX_MOVE_ATTEMPTS) {
+        const retryDelay = MOVE_RETRY_MS[moveAttempts - 1];
+        moveRetryNotBefore = Date.now() + retryDelay;
+        schedule(retryDelay);
+      }
     } finally {
       moving = false;
     }
@@ -1440,6 +1455,7 @@
         lastUrl = location.href;
         currentConversationId = null;
         moveAttempts = 0;
+        moveRetryNotBefore = 0;
       }
       refreshNativeDeleteWatch();
       schedule(180);

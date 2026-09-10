@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "name": "Chat On Steroids CLEAR",
-  "featureVersion": "1.0.1",
+  "featureVersion": "1.0.2",
   "protocol": 1,
-  "adapterRevision": 2,
+  "adapterRevision": 3,
   "releases": {
     "2.0.6": {
       "platform": "darwin",

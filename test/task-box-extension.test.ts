@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 const extension = path.join(process.cwd(), 'extension');
 const compatibilitySource = readFileSync(path.join(extension, 'task-box-compatibility.js'), 'utf8');
@@ -335,6 +335,76 @@ describe('companion TASK BOX page behavior', () => {
     closeContent(h);
   });
 
+  it('finds a native delete-confirm dialog through the same open-dialog authority used for Project creation', async () => {
+    vi.useFakeTimers();
+    let h: Awaited<ReturnType<typeof makeContent>> | null = null;
+    try {
+      const ticket = { generation: 7, requestId: requestOne, kind: 'clear' };
+      h = await makeContent(
+        `<nav>${taskRow()}</nav><div id="portal"></div>`,
+        { [FEATURE]: true, [GLOBAL]: {
+          state: 'deleting', generation: 7, kind: 'clear', requestId: requestOne,
+          owner: { tabId: 17, documentId: 'document-17' }, clearCompleted: true
+        } }
+      );
+      const context = h.hooks.taskBoxSidebarContext();
+      const menu = makeNativeProjectMenu(h.document);
+      const remove = [...menu.querySelectorAll('button')]
+        .find((button) => button.textContent === 'プロジェクトを削除する')!;
+      remove.addEventListener('click', () => {
+        menu.remove();
+        const dialog = h!.document.createElement('dialog');
+        dialog.setAttribute('open', '');
+        const confirm = h!.document.createElement('button');
+        confirm.textContent = 'Delete from Chat and Work';
+        confirm.addEventListener('click', () => {
+          h!.document.querySelector('[data-row="task-old"]')?.remove();
+          dialog.remove();
+        });
+        dialog.append(confirm);
+        h!.document.getElementById('portal')!.append(dialog);
+      });
+      h.document.getElementById('portal')!.append(menu);
+
+      const deletion = h.hooks.deleteTaskBoxProjectFromContext(context, menu, ticket);
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(4_000);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(9_000);
+      await expect(deletion).resolves.toBeUndefined();
+      expect(h.document.querySelector('[data-row="task-old"]')).toBeNull();
+    } finally {
+      if (h) closeContent(h);
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let pointer or DOM activity collapse the UI_BUSY retry backoff', async () => {
+    let h: Awaited<ReturnType<typeof makeContent>> | null = null;
+    try {
+      h = await makeContent(
+        `<main><div data-clf-bootstrap="worker"></div><div role="menu">busy</div></main>`,
+        { [FEATURE]: true, [GLOBAL]: { state: 'present', generation: 0 } }
+      );
+      await new Promise(resolve => setTimeout(resolve, 350));
+      const first = structuredClone(h.storage.data.lastMoveOperation);
+      expect(first).toMatchObject({ stage: 'failed', lastError: 'UI_BUSY' });
+
+      h.document.body.dispatchEvent(new h.window.Event('pointerover', { bubbles: true }));
+      const mutation = h.document.createElement('span');
+      h.document.body.append(mutation);
+      await new Promise(resolve => setTimeout(resolve, 400));
+      expect(h.storage.data.lastMoveOperation.operationId).toBe(first.operationId);
+
+      await new Promise(resolve => setTimeout(resolve, 650));
+      expect(h.storage.data.lastMoveOperation.operationId).not.toBe(first.operationId);
+      expect(h.storage.data.lastMoveOperation.lastError).toBe('UI_BUSY');
+    } finally {
+      if (h) closeContent(h);
+    }
+  });
+
   it('refuses ambiguous project-name inputs before writing either input', async () => {
     const h = await makeContent('<dialog open id="create"><input type="text" aria-label="Project name"><input type="text" aria-label="プロジェクト名"></dialog>', { [FEATURE]: true });
     expect(() => h.hooks.findProjectNameInput(h.document.getElementById('create'))).toThrow('PROJECT_NAME_INPUT_AMBIGUOUS');
@@ -345,7 +415,7 @@ describe('companion TASK BOX page behavior', () => {
   it('replaces an older adapter once without an extension reload and retains the healthy current adapter', async () => {
     const h = await makeContent('<nav></nav>', { [FEATURE]: true });
     const old = h.window.__CLF_TASK_BOX_RUNTIME__;
-    old.adapterRevision = 1;
+    old.adapterRevision = 2;
     let stops = 0;
     const stop = old.stop;
     old.stop = () => { stops++; stop(); };
@@ -353,7 +423,7 @@ describe('companion TASK BOX page behavior', () => {
     await h.window.CLFTaskBox.start();
     const current = h.window.__CLF_TASK_BOX_RUNTIME__;
     expect(current).not.toBe(old);
-    expect(current.adapterRevision).toBe(2);
+    expect(current.adapterRevision).toBe(3);
     expect(stops).toBe(1);
     h.window.eval(contentSource);
     await h.window.CLFTaskBox.start();
