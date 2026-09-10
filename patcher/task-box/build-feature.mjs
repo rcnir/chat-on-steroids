@@ -10,7 +10,7 @@ export const extensionFiles = Object.freeze([
   'task-box.js', 'task-box-worker.js', 'task-box-setup.html', 'task-box-setup.js'
 ]);
 const inputFiles = [
-  'feature.json', 'main-adapter.mjs', 'extension-adapter.mjs', 'loader.cjs', 'package.mjs',
+  'feature.json', 'main-adapter.mjs', 'extension-adapter.mjs', 'plugin-refresh-adapter.mjs', 'loader.cjs', 'package.mjs',
   '../../scripts/rocaniiru-task-box-package.mjs', '../../scripts/macos-local-signing.mjs', '../../package-lock.json',
   'runtime/clear-service.ts', 'runtime/index.cjs', 'build-feature.mjs',
   ...extensionFiles.map(file => `extension/${file}`)

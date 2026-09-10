@@ -6,6 +6,7 @@ import asarImport from '@electron/asar';
 import plistImport from 'plist';
 import { feature, releaseFor, composeMain, sha256 } from './main-adapter.mjs';
 import { composeBackground } from './extension-adapter.mjs';
+import { composePluginRefreshExtension } from './plugin-refresh-adapter.mjs';
 import { buildFeature, featureFingerprint } from './build-feature.mjs';
 import { fingerprintTree, rebuildAsarWithMain, buildDescriptor, applyCandidate } from '../../scripts/rocaniiru-task-box-package.mjs';
 import { signMacOSBundle } from '../../scripts/macos-local-signing.mjs';
@@ -110,11 +111,17 @@ export async function prepareAddon({ appPath, outputRoot, baseDescriptorPath }) 
   // Recompose from the pinned upstream, not the previous feature's generated output.
   rmSync(extension, { recursive: true });
   cpSync(source.extension, extension, { recursive: true });
-  const background = readFileSync(path.join(source.extension, 'background.js'), 'utf8');
-  const composed = composeBackground(background, {
+  const pluginRefresh = composePluginRefreshExtension({
+    background: readFileSync(path.join(source.extension, 'background.js'), 'utf8'),
+    content: readFileSync(path.join(source.extension, 'content.js'), 'utf8'),
+    chatgptDom: readFileSync(path.join(source.extension, 'chatgpt-dom.js'), 'utf8')
+  }, { appVersion: source.version });
+  const composed = composeBackground(pluginRefresh.background, {
     appVersion: source.version, featureVersion: feature.featureVersion, protocol: feature.protocol
   });
   writeFileSync(path.join(extension, 'background.js'), composed);
+  writeFileSync(path.join(extension, 'content.js'), pluginRefresh.content);
+  writeFileSync(path.join(extension, 'chatgpt-dom.js'), pluginRefresh.chatgptDom);
   cpSync(path.join(featureRoot, 'extension'), extension, { recursive: true });
   writeJson(path.join(extension, 'manifest.json'), composeManifest(source.manifest, source.version));
   const addonRoot = path.join(resources, 'rocaniiru-task-box');

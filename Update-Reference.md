@@ -18,7 +18,7 @@
 | TASK BOX 機能 | `patcher/task-box/feature.json` の `featureVersion` | Project 操作・Clear 連携・不具合修正の版。本体と独立して更新する |
 | 接続契約 | 同ファイルの `protocol`、`adapterRevision`、`releases` | TASK BOX protocol、DOM adapter、検証済みの本体・companion の組み合わせ |
 
-現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.4`、TASK BOX protocol は `1`、DOM adapter revision は `3` です。
+現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.5`、TASK BOX protocol は `1`、DOM adapter revision は `3` です。
 
 ## ソースの配置
 
@@ -27,6 +27,7 @@ patcher/task-box/
   feature.json                  機能版・公式 artifact / main / companion の照合値
   main-adapter.mjs               公式 main への小さな接続。元の全バイトへ戻せることを検査
   extension-adapter.mjs          公式 companion の認証・document owner 境界を使う接続
+  plugin-refresh-adapter.mjs     現行 ChatGPT Plugins UI への fail-closed refresh adapter
   build-feature.mjs              独立機能の生成。公式アプリ全体をビルドしない
   package.mjs                    check / prepare / apply
   loader.cjs                    公式 Clear callback と既存 receipt 保存先の接続
@@ -244,3 +245,13 @@ recoveryは一般的な `reserved` / `deleting` 解放APIではありません�
 1.0.4では公式releaseのunsigned/ad-hoc配布方針は変更しません。ROCANIIRUのmacOS候補作成だけに `scripts/macos-local-signing.mjs` を置き、利用Macの `macos-code-signing.json` が存在する場合はKeychain上の固定code-signing identityで候補全体を署名します。設定済みidentityが見つからない場合はad-hocへ暗黙fallbackせず候補作成を拒否します。自己署名identityはDeveloper IDやnotarizationの代替ではなく、同一Mac上で `identifier + certificate root` のDesignated Requirementを維持するためだけのものです。private keyはKeychain外へ保存しません。
 
 この変更ではTASK BOX protocol `1` / DOM adapter revision `3`、Clear処理、Project lifecycle、保存状態を変更しません。署名identityをad-hocから固定certificateへ一度だけ移すため、切替直後のmacOS権限は利用者が最後に1回再承認する必要があります。その後は同じKeychain identityで署名されるTASK BOX更新ではDesignated Requirementが維持され、更新ごとの削除→再追加を要求しないことを実機で確認して閉じます。
+
+## TASK BOX 1.0.5 — ChatGPT plugin refresh current-route adapter / 2026-09-11
+
+ChatGPT の Plugins 管理入口が変わり、公式2.0.8 companionに残る旧 `/#settings/Plugins` root helper はrefresh対象へ到達できなくなった。1.0.5では公式companion原本を直接更新せず、TASK BOX候補生成時に `plugin-refresh-adapter.mjs` が検証済み公式bytesへ狭い変換を適用する。
+
+現行経路は **`/plugins` → exact installed plugin detail → `#settings/Plugins/<plugin_id>`**。helperは必ず `/plugins` から開始し、`Installed / インストール済み` の直下にある `/plugins/plugin_asdk_app_*` linkだけを候補とする。既知 `appId` がある場合はそのexact IDを要求し、初回だけdisplay nameのexact leaf matchを許す。public catalogue card、重複候補、未知route、入力中の管理画面は証拠として扱わない。
+
+管理画面では既存のdurable schema claimを維持する。schemaが既にcurrentならclickせずcurrent ACK、差分がある場合だけmain-process claim成功後に1回だけclickし、その後に期待schemaをread-backできた場合だけcompleteとする。click候補はvisible/enabledなbuttonで、accessible textが `更新する` / `Refresh` / `Update` のexact matchかつ `aria-haspopup` を持たないものに限定する。候補が0件または複数、claim拒否、navigation変化、schema不一致はfail-closed。
+
+adapterは公式 `background.js` / `content.js` / `chatgpt-dom.js` の既知seamをそれぞれexactly-onceで要求する。将来の公式更新でseamが変わった場合は候補生成を拒否し、upstream absorption reviewで「公式側が同等修正を取り込んだのか」「adapterを新しい公式shapeへ更新すべきか」を確認してからrelease tableを進める。旧root routeへ暗黙fallbackしない。
