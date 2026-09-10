@@ -99,16 +99,54 @@ function ensureHostPermission(manifest) {
   return { ...manifest, host_permissions: permissions };
 }
 
+function popupWithUpdater(html) {
+  if (html.includes(UPDATE_SCRIPT)) return html;
+  const tag = `    <script src="${UPDATE_SCRIPT}"></script>`;
+  if (!/<\/body\s*>/i.test(html)) throw new Error('popup.html has no closing body tag');
+  return html.replace(/<\/body\s*>/i, `${tag}\n  </body>`);
+}
+
+function relativeFiles(root, relativeDir = '') {
+  const files = [];
+  for (const entry of readdirSync(path.join(root, relativeDir), { withFileTypes: true })) {
+    const relative = relativeDir ? path.posix.join(relativeDir, entry.name) : entry.name;
+    if (entry.isDirectory()) files.push(...relativeFiles(root, relative));
+    else if (entry.isFile()) files.push(relative);
+    else throw new Error(`Unsupported extension entry: ${relative}`);
+  }
+  return files.sort();
+}
+
+function stableMatchesBundledPayload(stable, bundled) {
+  if (!validExtension(stable) || !validExtension(bundled)) return false;
+  const allowedExtras = new Set([SOURCE_MARKER, BOOTSTRAP_MARKER, PATCH_MARKER, UPDATE_SCRIPT]);
+  const bundledFiles = relativeFiles(bundled);
+  const stableFiles = relativeFiles(stable).filter((file) => !allowedExtras.has(file));
+  if (JSON.stringify(stableFiles) !== JSON.stringify(bundledFiles)) return false;
+  for (const relative of bundledFiles) {
+    const source = path.join(bundled, relative);
+    const published = path.join(stable, relative);
+    if (relative === 'popup.html') {
+      if (readFileSync(published, 'utf8') !== popupWithUpdater(readFileSync(source, 'utf8'))) return false;
+      continue;
+    }
+    if (relative === 'manifest.json') {
+      const expected = ensureHostPermission(JSON.parse(readFileSync(source, 'utf8')));
+      const actual = JSON.parse(readFileSync(published, 'utf8'));
+      if (JSON.stringify(actual) !== JSON.stringify(expected)) return false;
+      continue;
+    }
+    if (!readFileSync(source).equals(readFileSync(published))) return false;
+  }
+  return true;
+}
+
 export function injectUpdaterBootstrap(root, updaterScript, { version, bundledFingerprint } = {}) {
   if (!validExtension(root)) throw new Error(`Not a valid extension tree: ${root}`);
   const popup = path.join(root, 'popup.html');
   let html = readFileSync(popup, 'utf8');
-  const tag = `    <script src="${UPDATE_SCRIPT}"></script>`;
-  if (!html.includes(UPDATE_SCRIPT)) {
-    if (!/<\/body\s*>/i.test(html)) throw new Error('popup.html has no closing body tag');
-    html = html.replace(/<\/body\s*>/i, `${tag}\n  </body>`);
-    writeFileSync(popup, html, 'utf8');
-  }
+  const nextHtml = popupWithUpdater(html);
+  if (nextHtml !== html) writeFileSync(popup, nextHtml, 'utf8');
   cpSync(updaterScript, path.join(root, UPDATE_SCRIPT));
   const manifestPath = path.join(root, 'manifest.json');
   const manifest = ensureHostPermission(JSON.parse(readFileSync(manifestPath, 'utf8')));
@@ -221,7 +259,19 @@ export async function ensureBootstrap(config, observedInfo = null) {
   const updaterScript = path.join(config.dataDir, UPDATE_SCRIPT);
   if (!existsSync(updaterScript)) throw new Error('Persistent updater script is missing');
 
-  if (state.seenBundledFingerprint !== info.fingerprint || state.seenAppVersion !== info.version) {
+  // The source marker is only metadata. Another owner can replace the Chrome-visible tree
+  // while leaving (or later recreating) that marker, so verify the actual upstream payload
+  // bytes before deciding the stable companion is current. updater-owned metadata files are
+  // excluded by extensionFingerprint(), making this comparison exact and deterministic.
+  let stableMatchesBundled = false;
+  const stableWasPresent = validExtension(config.stableExtension);
+  try {
+    stableMatchesBundled = stableWasPresent && stableMatchesBundledPayload(config.stableExtension, info.bundled);
+  } catch {
+    stableMatchesBundled = false;
+  }
+
+  if (state.seenBundledFingerprint !== info.fingerprint || state.seenAppVersion !== info.version || !stableMatchesBundled) {
     const temp = mkdtempSync(path.join(os.tmpdir(), 'rocaniiru-cos-bootstrap-'));
     const tree = path.join(temp, 'extension');
     try {
@@ -230,7 +280,9 @@ export async function ensureBootstrap(config, observedInfo = null) {
       replaceTreeAtomic(tree, config.stableExtension);
       state.seenAppVersion = info.version;
       state.seenBundledFingerprint = info.fingerprint;
-      state.reloadRequired = runtimeAdopted;
+      // Replacing a path Chrome already has loaded requires one extension reload even when
+      // the app version itself did not change. A first materialization has nothing old to reload.
+      state.reloadRequired = runtimeAdopted || stableWasPresent;
       state.lastError = null;
       saveState(config, state);
     } finally { rmSync(temp, { recursive: true, force: true }); }

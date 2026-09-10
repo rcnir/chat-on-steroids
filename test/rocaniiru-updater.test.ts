@@ -78,6 +78,32 @@ it('fingerprints the upstream payload independently of updater metadata files', 
   expect(extensionFingerprint(root)).toBe(before);
 });
 
+it('republishes bundled companion when the marker is current but stable payload bytes are stale', async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'task-box-stale-stable-'));roots.push(root);
+  const bundled=path.join(root,'bundled');const stable=path.join(root,'stable');
+  await mkdir(bundled);await mkdir(stable);
+  const manifest={manifest_version:3,version:'2.0.8',background:{service_worker:'task-box-worker.js',type:'module'},host_permissions:[]};
+  await writeFile(path.join(bundled,'manifest.json'),JSON.stringify(manifest));
+  await writeFile(path.join(bundled,'popup.html'),'<body></body>');
+  await writeFile(path.join(bundled,'task-box-worker.js'),'TASK_BOX_1_0_3');
+  await writeFile(path.join(stable,'manifest.json'),JSON.stringify({...manifest,background:{service_worker:'background.js',type:'module'}}));
+  await writeFile(path.join(stable,'popup.html'),'<body></body>');
+  const fingerprint=extensionFingerprint(bundled);
+  await writeFile(path.join(stable,'.chat-on-steroids-source'),fingerprint);
+  await writeFile(path.join(root,'rocaniiru-updater.js'),'UPDATER');
+  await writeFile(path.join(root,'state.json'),JSON.stringify({schema:1,seenAppVersion:'2.0.8',seenBundledFingerprint:fingerprint,
+    appliedVersion:'2.0.8',appliedPatchCommit:'task-box-addon@1.0.3',activationRequired:false,reloadRequired:true}));
+
+  const result=await ensureBootstrap({dataDir:root,stableExtension:stable,repoPath:root},
+    {version:'2.0.8',fingerprint,bundled});
+  expect(result.refreshedBase).toBe(true);
+  expect(result.state.reloadRequired).toBe(true);
+  const repaired=JSON.parse(await readFile(path.join(stable,'manifest.json'),'utf8'));
+  expect(repaired.background.service_worker).toBe('task-box-worker.js');
+  expect(await readFile(path.join(stable,'task-box-worker.js'),'utf8')).toBe('TASK_BOX_1_0_3');
+  expect((await readFile(path.join(stable,'.chat-on-steroids-source'),'utf8')).trim()).toBe(fingerprint);
+});
+
 it('freezes the stable extension while runtime adoption is unresolved, even if bundled bytes change',async()=>{
   const root=await mkdtemp(path.join(os.tmpdir(),'task-box-pending-updater-'));roots.push(root);
   const stable=path.join(root,'stable');await mkdir(stable);
