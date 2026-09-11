@@ -101,6 +101,10 @@ const REFRESH_WORKFLOW = `  async function refreshManagedPlugin(request) {
       if (before === expected) {
         return (await ask({ type: 'plugin_refresh', action: 'current', id: request.id, appId, connectorName: request.connectorName, tools: view.tools }))?.data?.ok === true && stillCurrent();
       }
+      if (request.verifyOnly === true) {
+        await fail('A previous Refresh was claimed, but the provider schema is still stale');
+        return false;
+      }
       if (!view.refresh || view.refresh.disabled || view.refresh.getAttribute?.('aria-disabled') === 'true' || view.refresh.hasAttribute?.('aria-haspopup')) {
         await fail('Connector schema differs, but an exact safe Refresh control could not be verified');
         return false;

@@ -10,13 +10,15 @@ const appId = 'asdk_app_synthetic';
 const pluginId = `plugin_${appId}`;
 const tools = [{ name: 'read', description: 'Read current.', inputSchema: { type: 'object' } }];
 
-function official(appVersion: '2.0.6' | '2.0.7' | '2.0.8', file: string) {
+type SupportedVersion = '2.0.6' | '2.0.7' | '2.0.8' | '2.0.9';
+
+function official(appVersion: SupportedVersion, file: string) {
   return execFileSync('git', ['show', `v${appVersion}:extension/${file}`], {
     cwd: process.cwd(), encoding: 'utf8', maxBuffer: 3 * 1024 * 1024
   });
 }
 
-function compose(appVersion: '2.0.6' | '2.0.7' | '2.0.8' = '2.0.8') {
+function compose(appVersion: SupportedVersion = '2.0.9') {
   return composePluginRefreshExtension({
     background: official(appVersion, 'background.js'),
     content: official(appVersion, 'content.js'),
@@ -32,7 +34,7 @@ function contentWorkflow() {
   return source.slice(start, next > start ? next : fallback);
 }
 
-function backgroundWorkflow(appVersion: '2.0.6' | '2.0.7' | '2.0.8' = '2.0.8') {
+function backgroundWorkflow(appVersion: SupportedVersion = '2.0.9') {
   const source = compose(appVersion).background;
   return source.slice(source.indexOf('let pluginRefreshFlight = null;'), source.indexOf('async function catalogProbe('));
 }
@@ -56,7 +58,7 @@ function runWorkflow(href: string, overrides: Record<string, unknown> = {}) {
 }
 
 describe('TASK BOX current ChatGPT plugin refresh adapter', () => {
-  it.each(['2.0.6', '2.0.7', '2.0.8'] as const)('replaces obsolete root routing on official %s without weakening exact management custody', appVersion => {
+  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9'] as const)('replaces obsolete root routing on official %s without weakening exact management custody', appVersion => {
     const output = compose(appVersion);
     expect(output.background).toContain('https://chatgpt.com/plugins?cos-plugin-refresh=${request.id}');
     expect(output.background).not.toContain('https://chatgpt.com/?cos-plugin-refresh=');
@@ -77,7 +79,7 @@ describe('TASK BOX current ChatGPT plugin refresh adapter', () => {
     expect(output.chatgptDom).toContain("hasAttribute('aria-haspopup')");
   });
 
-  it.each(['2.0.7', '2.0.8'] as const)('keeps automatic plugin refresh independent from browser-only chat recovery on %s', async appVersion => {
+  it.each(['2.0.7', '2.0.8', '2.0.9'] as const)('keeps automatic plugin refresh independent from browser-only chat recovery on %s', async appVersion => {
     const request = { id: requestId, surface: 'core' };
     const create = vi.fn(async (url: string) => ({ id: 8, url }));
     const context = vm.createContext({
@@ -198,6 +200,42 @@ describe('TASK BOX current ChatGPT plugin refresh adapter', () => {
     expect(await h.run({ id: requestId, appId, connectorName: 'Chat On Steroids Core', tools })).toBe(false);
     expect(click).not.toHaveBeenCalled();
     expect(ask.mock.calls.map(([message]) => message.action)).toEqual(['claim', 'fail']);
+  });
+
+  it('reconciles an attempted refresh only by exact current observation and never clicks again', async () => {
+    const click = vi.fn();
+    const href = `https://chatgpt.com/plugins/${pluginId}?cos-plugin-refresh=${requestId}#settings/Plugins/${pluginId}`;
+    const h = runWorkflow(href);
+    (h.context.CLF_DOM as any).pluginRefreshView = vi.fn(() => ({
+      appId, connectorName: 'Chat On Steroids Core', versionId: 'version-2',
+      refresh: { disabled: false, isConnected: true, click, getAttribute: () => null, hasAttribute: () => false },
+      tools
+    }));
+
+    expect(await h.run({ id: requestId, appId, connectorName: 'Chat On Steroids Core', tools, verifyOnly: true })).toBe(true);
+    expect(click).not.toHaveBeenCalled();
+    expect(h.ask.mock.calls.map(([message]) => (message as any).action)).toEqual(['current']);
+  });
+
+  it('never re-clicks repeated verification and heals once the provider finally exposes the current schema', async () => {
+    const click = vi.fn();
+    const href = `https://chatgpt.com/plugins/${pluginId}?cos-plugin-refresh=${requestId}#settings/Plugins/${pluginId}`;
+    const h = runWorkflow(href);
+    let providerTools = [{ ...tools[0], description: 'Old description.' }];
+    (h.context.CLF_DOM as any).pluginRefreshView = vi.fn(() => ({
+      appId, connectorName: 'Chat On Steroids Core', versionId: 'version-old',
+      refresh: { disabled: false, isConnected: true, click, getAttribute: () => null, hasAttribute: () => false },
+      tools: providerTools
+    }));
+
+    expect(await h.run({ id: requestId, appId, connectorName: 'Chat On Steroids Core', tools, verifyOnly: true })).toBe(false);
+    expect(await h.run({ id: requestId, appId, connectorName: 'Chat On Steroids Core', tools, verifyOnly: true })).toBe(false);
+    expect(click).not.toHaveBeenCalled();
+    expect(h.ask.mock.calls.map(([message]) => (message as any).action)).toEqual(['fail', 'fail']);
+    providerTools = tools;
+    expect(await h.run({ id: requestId, appId, connectorName: 'Chat On Steroids Core', tools, verifyOnly: true })).toBe(true);
+    expect(click).not.toHaveBeenCalled();
+    expect(h.ask.mock.calls.map(([message]) => (message as any).action)).toEqual(['fail', 'fail', 'current']);
   });
 
   it('discovers only exact installed /plugins links and excludes public catalogue cards', () => {

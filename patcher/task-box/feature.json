@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "name": "Chat On Steroids CLEAR",
-  "featureVersion": "1.0.6",
+  "featureVersion": "1.0.8",
   "protocol": 1,
-  "adapterRevision": 3,
+  "adapterRevision": 5,
   "releases": {
     "2.0.6": {
       "platform": "darwin",
@@ -42,6 +42,7 @@
       "tagCommit": "ffebd99ae73f5f24a330748fc7918f0eb9e25259",
       "archiveSha256": "99871d62d4909c5166ea820dc92dbdc4f074a8aa3fd0f8a41ab9b3bd79d878ad",
       "mainSha256": "5b5543e5adbd4671677d23fc06215d7645e128484464b5470c87a450af1ef6f9",
+      "desktopSourceSha256": "3bfc79f3aeebe66bd225e8de934a5ebfda9dde10cb5c5be0a8586142a7fc7722",
       "bundleFingerprint": "df26aa831ff4aa3efa878cd66a59e667779edcc7074e2f29cd49be77c6bbcb22",
       "extensionFingerprint": "09af342ed47eb1a5b56339f1594ae0efc33fb51628ba3d898113aa683418fc32"
     }

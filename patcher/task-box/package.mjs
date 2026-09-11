@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync, rmSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,7 @@ import plistImport from 'plist';
 import { feature, releaseFor, composeMain, sha256 } from './main-adapter.mjs';
 import { composeBackground } from './extension-adapter.mjs';
 import { composePluginRefreshExtension } from './plugin-refresh-adapter.mjs';
+import { buildPatchedMacOSDesktopLibrary } from './macos-desktop-adapter.mjs';
 import { buildFeature, featureFingerprint } from './build-feature.mjs';
 import { fingerprintTree, rebuildAsarWithMain, buildDescriptor, applyCandidate } from '../../scripts/rocaniiru-task-box-package.mjs';
 import { signMacOSBundle } from '../../scripts/macos-local-signing.mjs';
@@ -15,6 +16,7 @@ const asar = asarImport?.default ?? asarImport;
 const plist = plistImport?.default ?? plistImport;
 const DEFAULT_APP = '/Applications/Chat On Steroids.app';
 const MAIN = 'out/main/index.js';
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const json = file => JSON.parse(readFileSync(file, 'utf8'));
 const writeJson = (file, value) => writeFileSync(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
 function run(command, args) {
@@ -107,6 +109,18 @@ export async function prepareAddon({ appPath, outputRoot, baseDescriptorPath }) 
   const candidate = path.join(out, 'Chat On Steroids.app');
   run('/usr/bin/ditto', [source.app, candidate]);
   const resources = path.join(candidate, 'Contents/Resources');
+  const nativePatch = buildPatchedMacOSDesktopLibrary({
+    repoRoot: REPO_ROOT,
+    version: source.version,
+    outputDir: path.join(out, 'desktop-native'),
+    arch: source.release.arch
+  });
+  if (nativePatch) {
+    const desktop = path.join(resources, 'desktop');
+    const installedLibrary = path.join(desktop, 'libcos-desktop.dylib');
+    if (!existsSync(installedLibrary)) throw new Error('TASK_BOX_MACOS_DESKTOP_LIBRARY_MISSING');
+    copyFileSync(nativePatch.library, installedLibrary);
+  }
   const extension = path.join(resources, 'extension');
   // Recompose from the pinned upstream, not the previous feature's generated output.
   rmSync(extension, { recursive: true });
@@ -157,6 +171,10 @@ export async function prepareAddon({ appPath, outputRoot, baseDescriptorPath }) 
     protocol: feature.protocol, adapterRevision: feature.adapterRevision,
     upstream: source.release, mainInsertedBytes: source.main.insertedBytes,
     runtimeFingerprint: fingerprintTree(path.join(resources, 'rocaniiru-task-box')),
+    macOSDesktopAdapted: nativePatch?.adapted === true,
+    macOSDesktopSourceSha256: nativePatch?.sourceSha256 ?? null,
+    macOSDesktopPatchedSourceSha256: nativePatch?.patchedSourceSha256 ?? null,
+    macOSDesktopLibrarySha256: nativePatch?.librarySha256 ?? null,
     officialMainBodyPreserved: source.main.pluginRefreshMainAdapted !== true,
     officialClearBodyPreserved: true, pluginRefreshMainAdapted: source.main.pluginRefreshMainAdapted === true,
     officialApplicationRebuilt: false,

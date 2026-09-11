@@ -31,6 +31,148 @@ const PLUGINS_ENROLLMENT_208_AFTER = `  if (names(tools) === names(publication.t
     if (tools.every((tool) => expected.get(tool.name) === hash(declaration([tool])))) return true;
   }
   return publication.surface === "core" && tools.every((tool) => surfaceDefinition("core").tools.includes(tool.name) || tool.name === "keep_astra_on_forever") && tools.filter((tool) => publication.tools.some((expected) => hash(declaration([tool])) === hash(declaration([expected])))).length >= 2;`;
+const PLUGIN_PENDING_209_BEFORE = `    return current2.flatMap((row2) => {
+      const publication = publications.get(row2.surface);
+      return publication && (settling.get(row2.surface)?.readyAt ?? 0) <= Date.now() && publication.schemaId === row2.schemaId && !row2.attempted && !row2.manual && row2.completedSchemaId !== row2.schemaId ? [{ ...structuredClone(publication), id: row2.id, appId: row2.appId }] : [];
+    });`;
+const PLUGIN_PENDING_209_AFTER = `    return current2.flatMap((row2) => {
+      const publication = publications.get(row2.surface);
+      if (!publication || (settling.get(row2.surface)?.readyAt ?? 0) > Date.now() || publication.schemaId !== row2.schemaId || row2.manual || row2.completedSchemaId === row2.schemaId) return [];
+      if (!row2.attempted) return [{ ...structuredClone(publication), id: row2.id, appId: row2.appId }];
+      // An ambiguous post-click outcome stays observable until exact provider state proves
+      // completion. Re-offering this request can never grant another click: verifyOnly is
+      // enforced in the browser workflow, while its owner-tab logic reuses one helper.
+      if (!row2.appId) return [];
+      return [{ ...structuredClone(publication), id: row2.id, appId: row2.appId, verifyOnly: true }];
+    });`;
+const PLUGIN_CLAIM_209_BEFORE = `function claimPluginRefresh(input2) {
+  return serial(async () => {
+    const current2 = await rows();
+    const row2 = exact(current2, input2);
+    if (!row2 || row2.attempted || row2.manual || row2.completedSchemaId === row2.schemaId || !recognizable(input2.tools, row2.surface)) return false;
+    const publication = publications.get(row2.surface);
+    if (row2.appId ? row2.appId !== input2.appId : input2.connectorName !== publication.connectorName || !enrollable(input2.tools, publication)) return false;
+    if (current2.some((other) => other !== row2 && other.appId === input2.appId)) return false;
+    const isCurrent = matches(input2.tools, publication.tools, row2.surface);
+    if (input2.alreadyCurrent === true ? !isCurrent : isCurrent) return false;
+    row2.appId = input2.appId;
+    row2.attempted = true;
+    delete row2.error;
+    if (input2.alreadyCurrent) row2.completedSchemaId = row2.schemaId;
+    await writeDurableNow("plugin-refresh", current2);
+    return true;
+  });
+}`;
+const PLUGIN_CLAIM_209_AFTER = `function claimPluginRefresh(input2) {
+  return serial(async () => {
+    const current2 = await rows();
+    const row2 = exact(current2, input2);
+    if (!row2 || row2.manual || row2.completedSchemaId === row2.schemaId || !recognizable(input2.tools, row2.surface)) return false;
+    const publication = publications.get(row2.surface);
+    if (row2.appId ? row2.appId !== input2.appId : input2.connectorName !== publication.connectorName || !enrollable(input2.tools, publication)) return false;
+    if (current2.some((other) => other !== row2 && other.appId === input2.appId)) return false;
+    const isCurrent = matches(input2.tools, publication.tools, row2.surface);
+    if (input2.alreadyCurrent === true) {
+      if (!isCurrent) return false;
+      // A previous Refresh may have succeeded after our browser read-back timed out.
+      // Exact app identity + exact current declarations are enough to repair the receipt,
+      // but never enough to grant another click.
+      row2.appId = input2.appId;
+      row2.completedSchemaId = row2.schemaId;
+      delete row2.error;
+      await writeDurableNow("plugin-refresh", current2);
+      return true;
+    }
+    if (row2.attempted || isCurrent) return false;
+    row2.appId = input2.appId;
+    row2.attempted = true;
+    delete row2.error;
+    await writeDurableNow("plugin-refresh", current2);
+    return true;
+  });
+}`;
+
+const MCP_TOOL_ACTIVITY_209_BEFORE = `let toolCallSeenAt = null;
+const surfaceToolCallAt = /* @__PURE__ */ new Map();
+function lastToolCallAt(surface) {
+  if (surface === void 0) return toolCallSeenAt;
+  return surfaceToolCallAt.get(surface) ?? null;
+}
+function resetToolClock() {
+  toolCallSeenAt = null;
+  surfaceToolCallAt.clear();
+  transportIdentity = { checked: false, present: false };
+}`;
+const MCP_TOOL_ACTIVITY_209_AFTER = `let toolCallSeenAt = null;
+const surfaceToolCallAt = /* @__PURE__ */ new Map();
+const historicalSurfaceRequestAt = /* @__PURE__ */ new Map();
+const historicalSurfaceToolCallAt = /* @__PURE__ */ new Map();
+const mcpActivitySurfaces = /* @__PURE__ */ new Set(["core", "desktop", "plugins"]);
+function activityLatest(values) {
+  let latest = null;
+  for (const value of values.values()) if (typeof value === "number" && Number.isFinite(value) && (latest === null || value > latest)) latest = value;
+  return latest;
+}
+function snapshotMcpActivity() {
+  return { version: 1, requests: Object.fromEntries(historicalSurfaceRequestAt), tools: Object.fromEntries(historicalSurfaceToolCallAt) };
+}
+function restoreMcpActivity(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || snapshot.version !== 1) return;
+  for (const [kind, target] of [["requests", historicalSurfaceRequestAt], ["tools", historicalSurfaceToolCallAt]]) {
+    const values = snapshot[kind];
+    if (!values || typeof values !== "object" || Array.isArray(values)) continue;
+    for (const [surface, value] of Object.entries(values)) {
+      if (mcpActivitySurfaces.has(surface) && typeof value === "number" && Number.isFinite(value) && value > 0 && value <= Date.now() + 3e5) target.set(surface, value);
+    }
+  }
+}
+function noteMcpActivity(kind, surface, time) {
+  if (!mcpActivitySurfaces.has(surface) || !Number.isFinite(time) || time <= 0) return;
+  (kind === "request" ? historicalSurfaceRequestAt : historicalSurfaceToolCallAt).set(surface, time);
+  writeDurableSoon("mcp-activity", snapshotMcpActivity());
+}
+function lastToolCallAt(surface) {
+  if (surface === void 0) return toolCallSeenAt ?? activityLatest(historicalSurfaceToolCallAt);
+  return surfaceToolCallAt.get(surface) ?? historicalSurfaceToolCallAt.get(surface) ?? null;
+}
+function resetToolClock() {
+  toolCallSeenAt = null;
+  surfaceToolCallAt.clear();
+  transportIdentity = { checked: false, present: false };
+}`;
+const MCP_TOOL_NOTE_209_BEFORE = `  surfaceToolCallAt.set(surface, Date.now());`;
+const MCP_TOOL_NOTE_209_AFTER = `  const surfaceToolSeenAt = Date.now();
+  surfaceToolCallAt.set(surface, surfaceToolSeenAt);
+  noteMcpActivity("tool", surface, surfaceToolSeenAt);`;
+const MCP_REQUEST_ACTIVITY_209_BEFORE = `let requestSeenAt = null;
+const surfaceRequestAt = /* @__PURE__ */ new Map();
+function lastRequestAt(surface) {
+  if (surface === void 0) return requestSeenAt;
+  return surfaceRequestAt.get(surface) ?? null;
+}`;
+const MCP_REQUEST_ACTIVITY_209_AFTER = `let requestSeenAt = null;
+const surfaceRequestAt = /* @__PURE__ */ new Map();
+function lastRequestAt(surface) {
+  if (surface === void 0) return requestSeenAt ?? activityLatest(historicalSurfaceRequestAt);
+  return surfaceRequestAt.get(surface) ?? historicalSurfaceRequestAt.get(surface) ?? null;
+}`;
+const MCP_REQUEST_NOTE_209_BEFORE = `    if (!selfTest && !tunnelProbe) {
+      requestSeenAt = Date.now();
+      surfaceRequestAt.set(route.id, requestSeenAt);
+    }`;
+const MCP_REQUEST_NOTE_209_AFTER = `    if (!selfTest && !tunnelProbe) {
+      requestSeenAt = Date.now();
+      surfaceRequestAt.set(route.id, requestSeenAt);
+      noteMcpActivity("request", route.id, requestSeenAt);
+    }`;
+const MCP_ACTIVITY_RESTORE_209_BEFORE = `  initSessionStore(userData);
+  initDurableStore(userData);
+  await restoreChatModels();`;
+const MCP_ACTIVITY_RESTORE_209_AFTER = `  initSessionStore(userData);
+  initDurableStore(userData);
+  restoreMcpActivity(await readDurable("mcp-activity"));
+  if (windowActivation.isDisabled()) return;
+  await restoreChatModels();`;
 const AUTH_SEAM = `  if (await browserDisconnected()) return json(res, 401, { error: "browser_disconnected" }, origin);
   if (!await authorised(req)) return json(res, 401, { error: "unauthorised" }, origin);
   if (!protocolCompatible(req)) {
@@ -70,6 +212,11 @@ function uniqueOffset(source, value, label) {
   return at;
 }
 
+function replaceUnique(source, before, after, label) {
+  uniqueOffset(source, before, label);
+  return source.replace(before, after);
+}
+
 /** Structural inspection is read-only and confers no packaging authority. */
 export function inspectMainSeams(source) {
   if (typeof source !== 'string' || source.includes('__rcnirTaskBox') || !source.startsWith('"use strict";\n')) {
@@ -86,12 +233,35 @@ export function inspectMainSeams(source) {
 /** 2.0.8 first exposed the Plugins surface; admit only an exact older declaration subset. */
 export function adaptPluginRefreshMain(source, version) {
   releaseFor(version);
-  if (version !== '2.0.8') return { source, adapted: false };
-  uniqueOffset(source, PLUGINS_ENROLLMENT_208_BEFORE, '2.0.8 Plugins refresh enrollment');
-  return {
-    source: source.replace(PLUGINS_ENROLLMENT_208_BEFORE, PLUGINS_ENROLLMENT_208_AFTER),
-    adapted: true
-  };
+  if (version === '2.0.8') {
+    return {
+      source: replaceUnique(source, PLUGINS_ENROLLMENT_208_BEFORE, PLUGINS_ENROLLMENT_208_AFTER, '2.0.8 Plugins refresh enrollment'),
+      adapted: true
+    };
+  }
+  if (version !== '2.0.9') return { source, adapted: false };
+  let output = source;
+  output = replaceUnique(output, PLUGIN_PENDING_209_BEFORE, PLUGIN_PENDING_209_AFTER, '2.0.9 refresh pending recovery');
+  output = replaceUnique(output, PLUGIN_CLAIM_209_BEFORE, PLUGIN_CLAIM_209_AFTER, '2.0.9 refresh current reconciliation');
+  output = replaceUnique(output, MCP_TOOL_ACTIVITY_209_BEFORE, MCP_TOOL_ACTIVITY_209_AFTER, '2.0.9 MCP tool activity history');
+  output = replaceUnique(output, MCP_TOOL_NOTE_209_BEFORE, MCP_TOOL_NOTE_209_AFTER, '2.0.9 MCP tool activity note');
+  output = replaceUnique(output, MCP_REQUEST_ACTIVITY_209_BEFORE, MCP_REQUEST_ACTIVITY_209_AFTER, '2.0.9 MCP request activity history');
+  output = replaceUnique(output, MCP_REQUEST_NOTE_209_BEFORE, MCP_REQUEST_NOTE_209_AFTER, '2.0.9 MCP request activity note');
+  output = replaceUnique(output, MCP_ACTIVITY_RESTORE_209_BEFORE, MCP_ACTIVITY_RESTORE_209_AFTER, '2.0.9 MCP activity restore');
+  return { source: output, adapted: true };
+}
+
+function restorePluginRefreshMain(source, version) {
+  if (version === '2.0.8') return source.replace(PLUGINS_ENROLLMENT_208_AFTER, PLUGINS_ENROLLMENT_208_BEFORE);
+  if (version !== '2.0.9') return source;
+  return source
+    .replace(PLUGIN_PENDING_209_AFTER, PLUGIN_PENDING_209_BEFORE)
+    .replace(PLUGIN_CLAIM_209_AFTER, PLUGIN_CLAIM_209_BEFORE)
+    .replace(MCP_TOOL_ACTIVITY_209_AFTER, MCP_TOOL_ACTIVITY_209_BEFORE)
+    .replace(MCP_TOOL_NOTE_209_AFTER, MCP_TOOL_NOTE_209_BEFORE)
+    .replace(MCP_REQUEST_ACTIVITY_209_AFTER, MCP_REQUEST_ACTIVITY_209_BEFORE)
+    .replace(MCP_REQUEST_NOTE_209_AFTER, MCP_REQUEST_NOTE_209_BEFORE)
+    .replace(MCP_ACTIVITY_RESTORE_209_AFTER, MCP_ACTIVITY_RESTORE_209_BEFORE);
 }
 
 /** Add only a loader, a callback capture and one protected dispatch. Never rebuild upstream. */
@@ -109,7 +279,7 @@ export function composeMain(source, version) {
   // Removing exactly our insertions must recover every upstream byte.
   let restored = patched.replace(LOADER, '').replace(ROUTE, '')
     .replace(`__rcnirTaskBox.captureClear(${OFFICIAL_CLEAR})`, OFFICIAL_CLEAR);
-  if (pluginRefresh.adapted) restored = restored.replace(PLUGINS_ENROLLMENT_208_AFTER, PLUGINS_ENROLLMENT_208_BEFORE);
+  if (pluginRefresh.adapted) restored = restorePluginRefreshMain(restored, version);
   if (restored !== source) throw new Error('TASK_BOX_UPSTREAM_PRESERVATION_FAILED');
   return { source: patched, sourceSha256: release.mainSha256, sha256: sha256(patched), seams,
     pluginRefreshMainAdapted: pluginRefresh.adapted,

@@ -10,6 +10,8 @@ import { emitRuntime, compatibilityScript, featureFingerprint } from '../patcher
 // @ts-expect-error Plain ESM build-time module.
 import { adaptPluginRefreshMain, composeMain, OFFICIAL_CLEAR, releaseFor } from '../patcher/task-box/main-adapter.mjs';
 // @ts-expect-error Plain ESM build-time module.
+import { adaptMacOSDesktopSource, officialMacOSDesktopSource } from '../patcher/task-box/macos-desktop-adapter.mjs';
+// @ts-expect-error Plain ESM build-time module.
 import { inspectOfficialApp, composeManifest, applyAddon } from '../patcher/task-box/package.mjs';
 
 const roots: string[] = [];
@@ -56,6 +58,27 @@ describe('independent TASK BOX package contract', () => {
     expect(featureFingerprint()).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it('splits v2.0.9 pointer proof from keyboard proof without weakening keyboard targeting', () => {
+    const source = officialMacOSDesktopSource(process.cwd(), '2.0.9');
+    const adapted = adaptMacOSDesktopSource(source, '2.0.9');
+    expect(adapted.adapted).toBe(true);
+    expect(adapted.sourceSha256).toBe('3bfc79f3aeebe66bd225e8de934a5ebfda9dde10cb5c5be0a8586142a7fc7722');
+    expect(adapted.source).toContain('private func windowTargetMatches(_ row: WindowRow) -> Bool');
+    expect(adapted.source).toContain('guard focusedAXElementWindowID(for: row.pid, rows: rows) == row.id else { return false }');
+    expect(adapted.source.match(/assertPointerTarget\(targetWindow\)/g)).toHaveLength(5);
+    expect(adapted.source).toContain('_ = try assertPointerTarget(windowID)');
+    expect(adapted.source.match(/if windowTargetMatches\(row\) \{ return true \}/g)).toHaveLength(2);
+    expect(adapted.source).toContain('let target = try assertInputTarget(targetWindow)');
+    expect(adapted.source).toContain('if let inputWindow { _ = try assertInputTarget(inputWindow) }');
+  });
+
+  it('keeps v2.0.9 attempted refresh recovery re-observable without a process-local spend', async () => {
+    const adapter = await fs.readFile(path.join(process.cwd(), 'patcher/task-box/main-adapter.mjs'), 'utf8');
+    expect(adapter).toContain('if (!row2.appId) return [];');
+    expect(adapter).toContain('verifyOnly: true');
+    expect(adapter).not.toContain('pluginRefreshVerifySeen');
+  });
+
   it('rejects a prepared package from different feature or packaging code before any apply', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task-box-stale-package-')); roots.push(root);
     const descriptorPath = path.join(root, 'stale.json');
@@ -67,10 +90,10 @@ describe('independent TASK BOX package contract', () => {
     expect(build).toContain("'../../package-lock.json'");
   });
 
-  it.each(['2.0.6', '2.0.7', '2.0.8'])('generates separate feature and upstream %s identities', version => {
+  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9'])('generates separate feature and upstream %s identities', version => {
     const box: any = {};
     vm.runInNewContext(compatibilityScript(version), box);
-    expect(box.CLFTaskBoxCompatibility).toMatchObject({ appVersion: version, featureVersion: '1.0.6', protocol: 1, adapterRevision: 3 });
+    expect(box.CLFTaskBoxCompatibility).toMatchObject({ appVersion: version, featureVersion: '1.0.8', protocol: 1, adapterRevision: 5 });
     const original = { version, background: { service_worker: 'background.js', type: 'module' },
       permissions: ['storage', 'scripting'], content_scripts: [{ js: ['content.js'], matches: ['https://chatgpt.com/*'] }] };
     const assembled = composeManifest(original, version);
@@ -140,11 +163,11 @@ describe.skipIf(!process.env.COS_TASK_BOX_RELEASE_TEST_ROOT)('official distribut
     await fs.writeFile(path.join(copy, 'Contents/Resources/extra-untrusted-payload'), 'not in official archive');
     expect(() => inspectOfficialApp(copy)).toThrow(/OFFICIAL_BUNDLE_HASH_MISMATCH/);
   });
-  it.each(['2.0.6', '2.0.7', '2.0.8'])('keeps upstream %s auth gates and executes the addon through the actual compiled handler', async version => {
+  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9'])('keeps upstream %s auth gates and executes the addon through the actual compiled handler', async version => {
     const app = path.join(process.env.COS_TASK_BOX_RELEASE_TEST_ROOT!, version, 'unpacked/Chat On Steroids.app');
     const inspected = inspectOfficialApp(app);
-    expect(inspected.main.insertedBytes).toBe(version === '2.0.8' ? 943 : 673);
-    expect(inspected.main.pluginRefreshMainAdapted).toBe(version === '2.0.8');
+    expect(inspected.main.insertedBytes).toBe(version === '2.0.8' ? 943 : version === '2.0.9' ? 3574 : 673);
+    expect(inspected.main.pluginRefreshMainAdapted).toBe(version === '2.0.8' || version === '2.0.9');
     const h = await harness();
     let resets = 0, barriers = 0;
     const official = vm.runInNewContext(`(${OFFICIAL_CLEAR})`, {
