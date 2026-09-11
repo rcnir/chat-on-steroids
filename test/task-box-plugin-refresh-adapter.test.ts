@@ -32,6 +32,11 @@ function contentWorkflow() {
   return source.slice(start, next > start ? next : fallback);
 }
 
+function backgroundWorkflow(appVersion: '2.0.6' | '2.0.7' | '2.0.8' = '2.0.8') {
+  const source = compose(appVersion).background;
+  return source.slice(source.indexOf('let pluginRefreshFlight = null;'), source.indexOf('async function catalogProbe('));
+}
+
 function runWorkflow(href: string, overrides: Record<string, unknown> = {}) {
   const assign = vi.fn();
   const ask = vi.fn(async (message: { action: string }) => ({ data: { ok: message.action !== 'deny' } }));
@@ -55,6 +60,13 @@ describe('TASK BOX current ChatGPT plugin refresh adapter', () => {
     const output = compose(appVersion);
     expect(output.background).toContain('https://chatgpt.com/plugins?cos-plugin-refresh=${request.id}');
     expect(output.background).not.toContain('https://chatgpt.com/?cos-plugin-refresh=');
+    expect(output.background).toContain('pending.data.requests.slice(0, 3)');
+    if (appVersion !== '2.0.6') {
+      expect(output.background).not.toContain('inspectRequestedPluginRefresh(publications, background, browserOnly');
+      expect(output.background).not.toContain('if (browserOnly) return');
+      expect(output.background).not.toContain("url.pathname !== '/' || !/^#settings\\/Plugins");
+      expect(output.background).toContain("const ownedRoute = (path === '/plugins' && !url.hash)");
+    }
     expect(output.content).toContain("path === '/plugins' && !url.hash");
     expect(output.content).toContain('/^\\/plugins\\/(plugin_(asdk_app_');
     expect(output.content).toContain('url.hash === `#settings/Plugins/${detail[1]}`');
@@ -63,6 +75,68 @@ describe('TASK BOX current ChatGPT plugin refresh adapter', () => {
     expect(output.chatgptDom).not.toContain('pluginInstalledButtons');
     expect(output.chatgptDom).toContain("new Set(['更新する', 'Refresh', 'Update'])");
     expect(output.chatgptDom).toContain("hasAttribute('aria-haspopup')");
+  });
+
+  it.each(['2.0.7', '2.0.8'] as const)('keeps automatic plugin refresh independent from browser-only chat recovery on %s', async appVersion => {
+    const request = { id: requestId, surface: 'core' };
+    const create = vi.fn(async (url: string) => ({ id: 8, url }));
+    const context = vm.createContext({
+      URL, setTimeout, clearTimeout, CHATGPT_TAB_URLS: ['https://chatgpt.com/*'], createChatTab: create,
+      call: async () => ({ ok: true, data: { requests: [request] } }),
+      chrome: {
+        storage: { session: { get: async () => ({}), set: async () => undefined } },
+        tabs: { query: async () => [] }
+      }
+    });
+    vm.runInContext(`${backgroundWorkflow(appVersion)}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);
+
+    // The obsolete third argument is intentionally ignored by the adapted two-argument owner.
+    await (context.run as Function)([{ surface: 'core' }], true, true);
+    expect(create).toHaveBeenCalledExactlyOnceWith(`https://chatgpt.com/plugins?cos-plugin-refresh=${requestId}`, true);
+  });
+
+  it('keeps the third Plugins request in scope instead of treating its helper as stale', async () => {
+    const requests = [
+      { id: requestId, surface: 'core' },
+      { id: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff', surface: 'desktop' },
+      { id: 'cccccccc-dddd-4eee-8fff-aaaaaaaaaaaa', surface: 'plugins' }
+    ];
+    const tab = { id: 9, url: `https://chatgpt.com/plugins?cos-plugin-refresh=${requests[2]!.id}` };
+    const sendMessage = vi.fn(async () => ({ ok: true }));
+    const context = vm.createContext({
+      URL, setTimeout, clearTimeout, CHATGPT_TAB_URLS: ['https://chatgpt.com/*'], createChatTab: vi.fn(),
+      call: async () => ({ ok: true, data: { requests } }),
+      chrome: {
+        storage: { session: { get: async () => ({}), set: async () => undefined } },
+        tabs: { query: async () => [tab], get: async () => tab, remove: vi.fn(), sendMessage }
+      }
+    });
+    vm.runInContext(`${backgroundWorkflow()}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);
+
+    await (context.run as Function)([{ surface: 'plugins' }], true);
+    expect(sendMessage).toHaveBeenCalledWith(9, { type: 'clf-plugin-refresh', request: requests[2] });
+  });
+
+  it('restores a dropped marker only on the current /plugins owner route', async () => {
+    const request = { id: requestId, surface: 'core', appId };
+    const tab = { id: 11, url: `https://chatgpt.com/plugins/${pluginId}#settings/Plugins/${pluginId}` };
+    const update = vi.fn(async () => tab);
+    const create = vi.fn();
+    const context = vm.createContext({
+      URL, setTimeout, clearTimeout, CHATGPT_TAB_URLS: ['https://chatgpt.com/*'], createChatTab: create,
+      call: async () => ({ ok: true, data: { requests: [request] } }),
+      chrome: {
+        storage: { session: { get: async () => ({ pluginRefreshOwner: { id: requestId, tab: 11 } }), set: async () => undefined } },
+        tabs: { query: async () => [tab], get: async () => tab, update, remove: vi.fn(), sendMessage: vi.fn() }
+      }
+    });
+    vm.runInContext(`${backgroundWorkflow()}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);
+
+    await (context.run as Function)([{ surface: 'core' }], true);
+    expect(update).toHaveBeenCalledExactlyOnceWith(11, {
+      url: `https://chatgpt.com/plugins/${pluginId}?cos-plugin-refresh=${requestId}#settings/Plugins/${pluginId}`
+    });
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('starts every automatic refresh at /plugins, then opens the exact installed plugin detail before management', async () => {

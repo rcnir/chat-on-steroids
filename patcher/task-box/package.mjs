@@ -157,7 +157,9 @@ export async function prepareAddon({ appPath, outputRoot, baseDescriptorPath }) 
     protocol: feature.protocol, adapterRevision: feature.adapterRevision,
     upstream: source.release, mainInsertedBytes: source.main.insertedBytes,
     runtimeFingerprint: fingerprintTree(path.join(resources, 'rocaniiru-task-box')),
-    officialMainBodyPreserved: true, officialApplicationRebuilt: false,
+    officialMainBodyPreserved: source.main.pluginRefreshMainAdapted !== true,
+    officialClearBodyPreserved: true, pluginRefreshMainAdapted: source.main.pluginRefreshMainAdapted === true,
+    officialApplicationRebuilt: false,
     liveAcceptance: false
   };
   const descriptorPath = path.join(out, 'task-box-package.json');

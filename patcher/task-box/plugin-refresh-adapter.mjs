@@ -177,6 +177,32 @@ const NEW_BACKGROUND_MARKER = `function pluginRefreshMarker(tab) {
 
 const OLD_CREATE_URL = `https://chatgpt.com/?cos-plugin-refresh=\${request.id}#settings/Plugins\${request.appId ? \`/plugin_\${request.appId}\` : ''}`;
 const NEW_CREATE_URL = `https://chatgpt.com/plugins?cos-plugin-refresh=\${request.id}`;
+const OLD_REQUEST_LIMIT = '    const requests = pending.data.requests.slice(0, 2);';
+const NEW_REQUEST_LIMIT = `    // Core, Desktop and Plugins are separate published surfaces. Keep every one in scope.
+    const requests = pending.data.requests.slice(0, 3);`;
+const OLD_BROWSER_ONLY_SIGNATURE = 'function inspectRequestedPluginRefresh(publications, background, browserOnly = false) {';
+const NEW_BROWSER_ONLY_SIGNATURE = 'function inspectRequestedPluginRefresh(publications, background) {';
+const OLD_BROWSER_ONLY_RETURN = '      if (browserOnly) return;\n';
+const OLD_BROWSER_ONLY_CALL = '  inspectRequestedPluginRefresh(reply.data.pluginRefreshRequests, reply.data.background === true, reply.data.browserOnly === true);';
+const NEW_BROWSER_ONLY_CALL = '  inspectRequestedPluginRefresh(reply.data.pluginRefreshRequests, reply.data.background === true);';
+const OLD_OWNER_RECOVERY = `      if (pluginRefreshMarker(current) !== owner.id) {
+        const url = new URL(current.pendingUrl || current.url || '');
+        if (url.origin !== 'https://chatgpt.com' || url.pathname !== '/' || !/^#settings\\/Plugins(?:\\/plugin_asdk_app_[a-zA-Z0-9_-]+)?$/.test(url.hash)) return;
+        url.searchParams.set('${MARKER}', owner.id);
+        await chrome.tabs.update(current.id, { url: url.href });
+        return;
+      }`;
+const NEW_OWNER_RECOVERY = `      if (pluginRefreshMarker(current) !== owner.id) {
+        const url = new URL(current.pendingUrl || current.url || '');
+        const path = url.pathname.replace(/\\/+$/, '');
+        const detail = /^\\/plugins\\/(plugin_asdk_app_[a-zA-Z0-9_-]+)$/.exec(path);
+        const ownedRoute = (path === '/plugins' && !url.hash) ||
+          (detail && (!url.hash || url.hash === \`#settings/Plugins/\${detail[1]}\`));
+        if (url.origin !== 'https://chatgpt.com' || !ownedRoute) return;
+        url.searchParams.set('${MARKER}', owner.id);
+        await chrome.tabs.update(current.id, { url: url.href });
+        return;
+      }`;
 
 const OLD_FIBER_DOM_REFRESH = `    const buttons = [...document.querySelectorAll('button[data-clf-plugin-refresh]')].filter(button => button.getAttribute('data-clf-plugin-refresh') === snapshot.appId && button.getClientRects().length > 0);
     return typeof snapshot.refreshAvailable === 'boolean' && buttons.length === (snapshot.refreshAvailable ? 1 : 0) ? { appId: snapshot.appId, connectorName: snapshot.connectorName, versionId: typeof snapshot.versionId === 'string' ? snapshot.versionId.slice(0, 200) : null,
@@ -204,11 +230,22 @@ function composeContent(source) {
   return output;
 }
 
-function composeBackground(source) {
+function composeBackground(source, appVersion) {
   if (typeof source !== 'string' || source.includes("path === '/plugins' && !url.hash")) fail('BACKGROUND_ALREADY_COMPOSED');
   let output = replaceExact(source, OLD_BACKGROUND_MARKER, NEW_BACKGROUND_MARKER, 'BACKGROUND_MARKER_DRIFT');
   output = replaceExact(output, OLD_CREATE_URL, NEW_CREATE_URL, 'BACKGROUND_CREATE_ROUTE_DRIFT');
-  if (output.includes('chatgpt.com/?cos-plugin-refresh=')) fail('BACKGROUND_OLD_ROOT_ROUTE_REMAINS');
+  output = replaceExact(output, OLD_REQUEST_LIMIT, NEW_REQUEST_LIMIT, 'BACKGROUND_REQUEST_LIMIT_DRIFT');
+  if (appVersion !== '2.0.6') {
+    output = replaceExact(output, OLD_BROWSER_ONLY_SIGNATURE, NEW_BROWSER_ONLY_SIGNATURE, 'BACKGROUND_BROWSER_ONLY_SIGNATURE_DRIFT');
+    output = replaceExact(output, OLD_BROWSER_ONLY_RETURN, '', 'BACKGROUND_BROWSER_ONLY_GUARD_DRIFT');
+    output = replaceExact(output, OLD_BROWSER_ONLY_CALL, NEW_BROWSER_ONLY_CALL, 'BACKGROUND_BROWSER_ONLY_CALL_DRIFT');
+    output = replaceExact(output, OLD_OWNER_RECOVERY, NEW_OWNER_RECOVERY, 'BACKGROUND_OWNER_RECOVERY_DRIFT');
+  }
+  if (output.includes('chatgpt.com/?cos-plugin-refresh=') ||
+      output.includes("url.pathname !== '/' || !/^#settings\\/Plugins")) fail('BACKGROUND_OLD_ROOT_ROUTE_REMAINS');
+  if (appVersion !== '2.0.6' && /pluginRefresh[^\n]*browserOnly|if \(browserOnly\) return/.test(output)) {
+    fail('BACKGROUND_BROWSER_ONLY_DEPENDENCY_REMAINS');
+  }
   return output;
 }
 
@@ -230,7 +267,7 @@ function composeDom(source, appVersion) {
 export function composePluginRefreshExtension({ background, content, chatgptDom }, { appVersion } = {}) {
   releaseFor(appVersion);
   return {
-    background: composeBackground(background),
+    background: composeBackground(background, appVersion),
     content: composeContent(content),
     chatgptDom: composeDom(chatgptDom, appVersion)
   };

@@ -17,7 +17,7 @@ it('compares weekly app versions without treating equal versions as updates', ()
 it('selects the independent addon for verified releases and never uses the legacy fallback', () => {
   const config = { taskBoxAddon: true, repoPath: process.cwd(), defaultPatchCommit: '480b425', recipes: { '2.0.6': 'old' } };
   for (const version of ['2.0.6', '2.0.7', '2.0.8']) {
-    expect(patchRecipe(config, version)).toMatchObject({ kind: 'task-box-addon', featureVersion: '1.0.5' });
+    expect(patchRecipe(config, version)).toMatchObject({ kind: 'task-box-addon', featureVersion: '1.0.6' });
   }
   expect(() => patchRecipe(config, '2.0.999')).toThrow(/UNSUPPORTED_RELEASE/);
   expect(() => patchRecipe({ defaultPatchCommit: '480b425' }, '2.0.7')).toThrow();

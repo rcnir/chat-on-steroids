@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 // @ts-expect-error Plain ESM build-time module.
 import { emitRuntime, compatibilityScript, featureFingerprint } from '../patcher/task-box/build-feature.mjs';
 // @ts-expect-error Plain ESM build-time module.
-import { composeMain, OFFICIAL_CLEAR, releaseFor } from '../patcher/task-box/main-adapter.mjs';
+import { adaptPluginRefreshMain, composeMain, OFFICIAL_CLEAR, releaseFor } from '../patcher/task-box/main-adapter.mjs';
 // @ts-expect-error Plain ESM build-time module.
 import { inspectOfficialApp, composeManifest, applyAddon } from '../patcher/task-box/package.mjs';
 
@@ -40,6 +40,16 @@ async function harness() {
 }
 
 describe('independent TASK BOX package contract', () => {
+  it('admits an older exact Plugins declaration subset only on the 2.0.8 main seam', () => {
+    const before = `  if (names(tools) === names(publication.tools)) return true;\n  return publication.surface === "core" && tools.every((tool) => surfaceDefinition("core").tools.includes(tool.name) || tool.name === "keep_astra_on_forever") && tools.filter((tool) => publication.tools.some((expected) => hash(declaration([tool])) === hash(declaration([expected])))).length >= 2;`;
+    const adapted = adaptPluginRefreshMain(`prefix\n${before}\nsuffix`, '2.0.8');
+    expect(adapted.adapted).toBe(true);
+    expect(adapted.source).toContain('publication.surface === "plugins" && tools.length >= 2');
+    expect(adapted.source).toContain('expected.get(tool.name) === hash(declaration([tool]))');
+    expect(adaptPluginRefreshMain(`prefix\n${before}\nsuffix`, '2.0.7')).toEqual({ source: `prefix\n${before}\nsuffix`, adapted: false });
+    expect(() => adaptPluginRefreshMain('provider seam drifted', '2.0.8')).toThrow(/2\.0\.8 Plugins refresh enrollment/);
+  });
+
   it('never admits an unknown release or unknown official main bytes', () => {
     expect(() => releaseFor('2.0.999')).toThrow(/UNSUPPORTED_RELEASE/);
     expect(() => composeMain('not an official bundle', '2.0.7')).toThrow(/HASH_MISMATCH/);
@@ -60,7 +70,7 @@ describe('independent TASK BOX package contract', () => {
   it.each(['2.0.6', '2.0.7', '2.0.8'])('generates separate feature and upstream %s identities', version => {
     const box: any = {};
     vm.runInNewContext(compatibilityScript(version), box);
-    expect(box.CLFTaskBoxCompatibility).toMatchObject({ appVersion: version, featureVersion: '1.0.5', protocol: 1, adapterRevision: 3 });
+    expect(box.CLFTaskBoxCompatibility).toMatchObject({ appVersion: version, featureVersion: '1.0.6', protocol: 1, adapterRevision: 3 });
     const original = { version, background: { service_worker: 'background.js', type: 'module' },
       permissions: ['storage', 'scripting'], content_scripts: [{ js: ['content.js'], matches: ['https://chatgpt.com/*'] }] };
     const assembled = composeManifest(original, version);
@@ -133,7 +143,8 @@ describe.skipIf(!process.env.COS_TASK_BOX_RELEASE_TEST_ROOT)('official distribut
   it.each(['2.0.6', '2.0.7', '2.0.8'])('keeps upstream %s auth gates and executes the addon through the actual compiled handler', async version => {
     const app = path.join(process.env.COS_TASK_BOX_RELEASE_TEST_ROOT!, version, 'unpacked/Chat On Steroids.app');
     const inspected = inspectOfficialApp(app);
-    expect(inspected.main.insertedBytes).toBe(673);
+    expect(inspected.main.insertedBytes).toBe(version === '2.0.8' ? 943 : 673);
+    expect(inspected.main.pluginRefreshMainAdapted).toBe(version === '2.0.8');
     const h = await harness();
     let resets = 0, barriers = 0;
     const official = vm.runInNewContext(`(${OFFICIAL_CLEAR})`, {

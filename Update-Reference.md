@@ -18,7 +18,7 @@
 | TASK BOX 機能 | `patcher/task-box/feature.json` の `featureVersion` | Project 操作・Clear 連携・不具合修正の版。本体と独立して更新する |
 | 接続契約 | 同ファイルの `protocol`、`adapterRevision`、`releases` | TASK BOX protocol、DOM adapter、検証済みの本体・companion の組み合わせ |
 
-現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.5`、TASK BOX protocol は `1`、DOM adapter revision は `3` です。
+現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.6`、TASK BOX protocol は `1`、DOM adapter revision は `3` です。
 
 ## ソースの配置
 
@@ -255,3 +255,13 @@ ChatGPT の Plugins 管理入口が変わり、公式2.0.8 companionに残る旧
 管理画面では既存のdurable schema claimを維持する。schemaが既にcurrentならclickせずcurrent ACK、差分がある場合だけmain-process claim成功後に1回だけclickし、その後に期待schemaをread-backできた場合だけcompleteとする。click候補はvisible/enabledなbuttonで、accessible textが `更新する` / `Refresh` / `Update` のexact matchかつ `aria-haspopup` を持たないものに限定する。候補が0件または複数、claim拒否、navigation変化、schema不一致はfail-closed。
 
 adapterは公式 `background.js` / `content.js` / `chatgpt-dom.js` の既知seamをそれぞれexactly-onceで要求する。将来の公式更新でseamが変わった場合は候補生成を拒否し、upstream absorption reviewで「公式側が同等修正を取り込んだのか」「adapterを新しい公式shapeへ更新すべきか」を確認してからrelease tableを進める。旧root routeへ暗黙fallbackしない。
+
+1.0.5を2.0.8へcontrolled applyしたライブ確認では、本体停止・置換・起動は各1回で成功し、Clear ledgerは切替前後で同一hashを保持した。stable companionも1.0.5へ更新され、Chrome標準Reloadを1回行った。ただし実環境は `ui.browserOnly:true` で、公式2.0.8 backgroundがこのchat-recovery設定をautomatic plugin refreshにも流用していたため、pending Core/Desktop/Pluginsが再scheduleされてもhelper tabが作られなかった。さらに同じ公式backgroundの `pluginRefreshOwner` marker復旧枝だけ旧root route判定が残り、3 surfaceに対してpending対象を2件へ切っていた。したがって1.0.5のlive acceptanceは **未完了** とし、この不足を次版で前進修正する。
+
+## TASK BOX 1.0.6 — automatic plugin refresh ownership/reliability completion / 2026-09-11
+
+1.0.6は上記ライブ確認で見つかった残りのofficial-2.0.8前提を、同じfail-closed adapterへ統合する。Automatic plugin refreshは `autoRefreshPlugins` が公開したrefresh obligationそのものを根拠とし、chat recoveryの `browserOnly` では抑止しない。pending対象はCore / Desktop / Pluginsの最大3 surfaceを同じbatch scopeに保持する。2.0.7/2.0.8の `pluginRefreshOwner` marker復旧は `/plugins` index・exact `/plugins/plugin_asdk_app_*` detail・そのexact `#settings/Plugins/<plugin_id>` management routeだけを認め、旧 `/#settings/Plugins` へ戻さない。owner tabを利用者が閉じた場合に毎pollで再作成しない既存の安全意味は維持する。
+
+2.0.8で初めて公開されたPlugins surfaceについては、ChatGPT App IDがまだ未登録のままprovider側に旧schemaが見えている移行も扱う。display nameだけではclaimせず、旧snapshotが新しいlocal declarationの**2個以上の完全一致toolから成るsubset**である場合だけ初回enrollmentを許可し、foreign tool・同名だが変更されたdeclarationは拒否する。これは後続の検証済みplugin-refresh reliability修正と同じ証拠境界であり、2.0.6/2.0.7のmainには存在しないPlugins surfaceを追加しない。
+
+このため2.0.8では公式compiled mainのplugin-refresh enrollment seamもexactly-onceで変換する。公式Clear callback本文は変更せず、変換を逆適用すれば元の公式main全byteを復元できることを検査する。descriptorは `pluginRefreshMainAdapted:true` / `officialClearBodyPreserved:true` を記録し、main本文が完全無変更であるとは主張しない。未知seam・将来版は候補生成を止める。

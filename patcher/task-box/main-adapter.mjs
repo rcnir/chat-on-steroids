@@ -23,6 +23,14 @@ export const OFFICIAL_CLEAR = `async () => {
   }`;
 const CLEAR_REGISTRATION = `handle("swarm:reset", ${OFFICIAL_CLEAR});`;
 const ROUTE_SEAM = '  if (noteBrowserSeen()) changed();\n  if (route === "/models" && req.method === "POST") {';
+const PLUGINS_ENROLLMENT_208_BEFORE = `  if (names(tools) === names(publication.tools)) return true;
+  return publication.surface === "core" && tools.every((tool) => surfaceDefinition("core").tools.includes(tool.name) || tool.name === "keep_astra_on_forever") && tools.filter((tool) => publication.tools.some((expected) => hash(declaration([tool])) === hash(declaration([expected])))).length >= 2;`;
+const PLUGINS_ENROLLMENT_208_AFTER = `  if (names(tools) === names(publication.tools)) return true;
+  if (publication.surface === "plugins" && tools.length >= 2) {
+    const expected = new Map(publication.tools.map((tool) => [tool.name, hash(declaration([tool]))]));
+    if (tools.every((tool) => expected.get(tool.name) === hash(declaration([tool])))) return true;
+  }
+  return publication.surface === "core" && tools.every((tool) => surfaceDefinition("core").tools.includes(tool.name) || tool.name === "keep_astra_on_forever") && tools.filter((tool) => publication.tools.some((expected) => hash(declaration([tool])) === hash(declaration([expected])))).length >= 2;`;
 const AUTH_SEAM = `  if (await browserDisconnected()) return json(res, 401, { error: "browser_disconnected" }, origin);
   if (!await authorised(req)) return json(res, 401, { error: "unauthorised" }, origin);
   if (!protocolCompatible(req)) {
@@ -75,20 +83,35 @@ export function inspectMainSeams(source) {
   return { clear, route, auth };
 }
 
+/** 2.0.8 first exposed the Plugins surface; admit only an exact older declaration subset. */
+export function adaptPluginRefreshMain(source, version) {
+  releaseFor(version);
+  if (version !== '2.0.8') return { source, adapted: false };
+  uniqueOffset(source, PLUGINS_ENROLLMENT_208_BEFORE, '2.0.8 Plugins refresh enrollment');
+  return {
+    source: source.replace(PLUGINS_ENROLLMENT_208_BEFORE, PLUGINS_ENROLLMENT_208_AFTER),
+    adapted: true
+  };
+}
+
 /** Add only a loader, a callback capture and one protected dispatch. Never rebuild upstream. */
 export function composeMain(source, version) {
   const release = releaseFor(version);
   if (sha256(source) !== release.mainSha256) throw new Error('TASK_BOX_OFFICIAL_MAIN_HASH_MISMATCH');
   const seams = inspectMainSeams(source);
-  let patched = source.replace(CLEAR_REGISTRATION,
+  const pluginRefresh = adaptPluginRefreshMain(source, version);
+  let patched = pluginRefresh.source.replace(CLEAR_REGISTRATION,
     `handle("swarm:reset", __rcnirTaskBox.captureClear(${OFFICIAL_CLEAR}));`);
   patched = patched.replace(ROUTE_SEAM,
     '  if (noteBrowserSeen()) changed();\n' + ROUTE + '  if (route === "/models" && req.method === "POST") {');
   patched = patched.replace('"use strict";\n', '"use strict";\n' + LOADER);
   new vm.Script(patched, { filename: 'task-box-patched-main.js' });
   // Removing exactly our insertions must recover every upstream byte.
-  const restored = patched.replace(LOADER, '').replace(ROUTE, '')
+  let restored = patched.replace(LOADER, '').replace(ROUTE, '')
     .replace(`__rcnirTaskBox.captureClear(${OFFICIAL_CLEAR})`, OFFICIAL_CLEAR);
+  if (pluginRefresh.adapted) restored = restored.replace(PLUGINS_ENROLLMENT_208_AFTER, PLUGINS_ENROLLMENT_208_BEFORE);
   if (restored !== source) throw new Error('TASK_BOX_UPSTREAM_PRESERVATION_FAILED');
-  return { source: patched, sourceSha256: release.mainSha256, sha256: sha256(patched), seams, insertedBytes: Buffer.byteLength(patched) - Buffer.byteLength(source) };
+  return { source: patched, sourceSha256: release.mainSha256, sha256: sha256(patched), seams,
+    pluginRefreshMainAdapted: pluginRefresh.adapted,
+    insertedBytes: Buffer.byteLength(patched) - Buffer.byteLength(source) };
 }
