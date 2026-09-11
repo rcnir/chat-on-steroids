@@ -126,6 +126,35 @@ node scripts/rocaniiru-install-updater.mjs --task-box-addon
 
 将来版に無条件で対応する約束ではありません。互換性が不明なら追加機能を止め、公式アプリそのものの利用を妨げない設計です。
 
+### 高頻度更新向け：次回公式版の最短runbook
+
+CoS本体は短い間隔で更新される前提で扱います。新しい公式版を検知した時点で、**旧版用パッチを推測で流用しません**。`taskBoxAddon` updaterは未知版を`Not compatible`で止める一方、`release-intake/`へread-onlyの互換性receiptを一度だけ保存します。同じversionとbundled companion fingerprintではreceiptを再利用し、15秒maintenanceごとに本体全体を再hashしません。
+
+receiptは対応許可ではなく、次のレビューを始めるための証拠です。保存内容は、app version、architecture、installed bundle fingerprint、公式main hash、companion fingerprint、Bridge protocol、既存main/extension seamの一致状況、2.0.9で導入したMCP修復が「まだ必要／公式側へ吸収済みまたは既適用／shape変更」のどれか、plugin-refresh adapterの現行seamがそのまま適用可能か、ローカルに公式tagがあればmacOS Desktop Swift source hashと2.0.9 sourceとの一致、です。未知版を自動で`feature.json`へ追加したりcandidateを生成・適用したりはしません。
+
+手動で同じintakeを取り直す場合:
+
+```sh
+npm run patcher:intake -- \
+  --app "/path/to/verified/Chat On Steroids.app" \
+  --output "/path/to/release-intake.json"
+```
+
+次版対応は、以下の順序だけで進めます。
+
+1. updaterの自動receiptまたは`patcher:intake`結果を読む。`authority: review-required`のままなら未対応版であり、ここで本番patchを動かさない。
+2. 公式release/tag、macOS arm64 artifact、公開SHA-256をfresh取得し、downloaded artifactを照合する。intakeのinstalled bundleだけで公開artifact digestを代用しない。
+3. `compatibilityEvidence.main`を確認する。`baseSeams:false`または各2.0.9 repair seamが`changed`なら、旧transformを広げずその変更点を読む。`needs-patch`なら現行修復がまだ必要な候補、`absorbed-or-already-patched`なら公式吸収の可能性を先に検証する。
+4. `extensionContract.compatibleShape`と`pluginRefresh`三面を確認する。全部が既知shapeでも、それだけで新版をsupport扱いにはしない。document ownership、認証、current ChatGPT Plugins routeをactual sourceで確認する。
+5. `localTag.desktopSourceSha256`を確認する。2.0.9と同一sourceならnative pointer修復のcarry-forward候補。sourceが変わっていれば、旧Swift transformをhash条件だけ緩めて通さず、公式側のfocus/click実装を比較する。公式が修復を吸収していればnative patch自体を外す。
+6. Upstream Absorption Reviewを終えてから、公開artifact digest・tag commit・main・companion・必要ならDesktop source hashを`feature.json`へ追加する。版文字列だけ追加しない。
+7. `patcher:check`、release matrix、TASK BOX/updater tests、typecheck、`git diff --check`を通した後だけcandidateをprepareする。candidate生成とlive acceptanceを同じPASSとして扱わない。
+8. live cutoverは**終了1回・置換1回・起動1回**。CoSを終了した後にCoS自身のCore/Desktop MCPへ頼らない。必要なone-shot cutover実行主体は終了前にCoS process treeの外へ確実にdetachし、persistent/repeating launchd jobは使わない。
+9. 起動後はinstalled candidate fingerprint、固定code-signing Designated Requirement、TASK BOX/Clear durable state、updater adoption、companion reloadを確認する。TCCを推測でresetしない。
+10. acceptanceはCore / Desktop / Pluginsの実callとdurable `mcp-activity`、plugin-refresh receipt完了、Screen Recording / Accessibility granted、harmless Desktop click 1回を確認する。acceptance失敗は同じcandidateを再適用する権限ではない。原因を切り分け、必要なら新しいfeature revisionとして前進修正する。
+
+このrunbookの目的は「新版を自動承認すること」ではなく、**新版が来た瞬間に証拠収集を済ませ、差分レビューから開始できること**です。未知版で公式CoS自体は使えても、TASK BOX/addonは検証済みmatrixへ入るまでfail-closedを維持します。
+
 ## 検証コマンドと判定
 
 ```sh
@@ -143,7 +172,7 @@ COS_TASK_BOX_RELEASE_TEST_ROOT="/path/to/verified-upstream" \
   npx vitest run test/task-box-modular.test.ts
 ```
 
-対象フォルダ形式は `<root>/<version>/unpacked/Chat On Steroids.app` で、version は `2.0.6`・`2.0.7`・`2.0.8`。このテストは公式handlerの認証境界とClear callbackを、隔離された保存先・依存関数で実行します。Electron本体や稼働中アプリは起動しません。
+対象フォルダ形式は `<root>/<version>/unpacked/Chat On Steroids.app` で、version は `2.0.6`・`2.0.7`・`2.0.8`・`2.0.9`。このテストは公式handlerの認証境界とClear callbackを、隔離された保存先・依存関数で実行します。Electron本体や稼働中アプリは起動しません。
 
 必須の負例: 未知版／main不一致／認証失敗／古いdocument／重複request／応答喪失／保存失敗／壊れたreceipt／古いpending状態／機能無効化後の削除／曖昧なProject・入力欄。既存のnative dialogと空のTASK BOX再作成の回帰も維持します。
 

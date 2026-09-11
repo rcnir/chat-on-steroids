@@ -98,3 +98,62 @@ For controlled application replacement:
 
 Activation and acceptance checks are different phases; a delayed or failed acceptance check is
 not permission to apply the same candidate again.
+
+## A one-time restart must be mechanically one-shot, and STOP reports must distinguish past from future
+
+A user-approved single restart is an exact execution budget, not an intention. Do not implement it
+with an unverified persistent/repeating launchd job or any helper whose recurrence semantics have
+not been proven. A failed or delayed acceptance check is never permission to schedule another
+restart.
+
+When the user says STOP, cease issuing new actions immediately. Then distinguish three facts in the
+report: what already happened, what is currently in flight, and what future trigger was removed.
+Removing a scheduled trigger cannot undo a restart that already executed; never report that as if
+the executed restart itself was stopped.
+
+After every restart action, verify process start time and the application lifecycle log before
+claiming that it ran once or that it was successfully cancelled.
+
+## Do not depend on an application-owned control channel after stopping that application
+
+If the tool used to repair an application is itself served by that application, stopping the app
+also removes the repair channel. Prepare the complete one-shot cutover path before shutdown and make
+sure the executing process is genuinely outside the application's process tree. A successful
+pre-stop command does not prove that a post-stop command can still be delivered.
+
+Prefer a detached one-shot process with an explicit execution budget over a persistent scheduler.
+The cutover should fail closed before shutdown if its target PID, baseline fingerprint, candidate,
+or rollback boundary is not exact.
+
+## Pointer targeting and keyboard targeting do not require identical focus proof
+
+Mouse/pointer delivery and keyboard/text delivery have different safety evidence. Pointer input can
+be safely named by exact coordinates plus independent window-level authorities such as frontmost
+application, WindowServer front window and AX focused window. Keyboard/text input needs the stronger
+proof that the focused UI element also belongs to that exact window.
+
+Do not require a focused child control merely to click a valid window, and do not weaken keyboard
+proof just because pointer focus was made more permissive. Keep the two invariants separate and test
+both.
+
+## Ambiguous refresh success should be re-observed, never re-clicked
+
+When an external provider action was clicked once but the read-back timed out, the durable state is
+"attempted, outcome unresolved". That state may be re-observed repeatedly, but it must not grant a
+second click. Reconciliation should succeed only when exact provider identity and exact expected
+schema are later observed.
+
+This distinction is especially important across companion reloads: a process-local "already
+verified once" flag can consume the only verification opportunity before the new browser code is
+active. Verification may be repeatable; the irreversible side effect must remain at-most-once.
+
+## Fast upstream releases need automatic evidence intake, not automatic compatibility
+
+For a frequently updated upstream application, fail-closed support matrices are still correct, but
+unknown releases should automatically capture read-only compatibility evidence once. Record the
+version, bundle/main/companion fingerprints, bridge protocol and relevant seam classifications so
+the next update starts from a reviewable diff instead of a fresh forensic session.
+
+Evidence intake is not support authority. A new release still requires the published artifact
+digest, explicit catalog entry, regression tests and live acceptance before the local patch is
+allowed to run.

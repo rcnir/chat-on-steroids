@@ -12,6 +12,8 @@ import { adaptPluginRefreshMain, composeMain, OFFICIAL_CLEAR, releaseFor } from 
 // @ts-expect-error Plain ESM build-time module.
 import { adaptMacOSDesktopSource, officialMacOSDesktopSource } from '../patcher/task-box/macos-desktop-adapter.mjs';
 // @ts-expect-error Plain ESM build-time module.
+import { inspectReleaseCompatibilityEvidence } from '../patcher/task-box/release-intake.mjs';
+// @ts-expect-error Plain ESM build-time module.
 import { inspectOfficialApp, composeManifest, applyAddon } from '../patcher/task-box/package.mjs';
 
 const roots: string[] = [];
@@ -56,6 +58,19 @@ describe('independent TASK BOX package contract', () => {
     expect(() => releaseFor('2.0.999')).toThrow(/UNSUPPORTED_RELEASE/);
     expect(() => composeMain('not an official bundle', '2.0.7')).toThrow(/HASH_MISMATCH/);
     expect(featureFingerprint()).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('keeps future-release probes read-only and fail-closed on unknown shapes', () => {
+    const evidence = inspectReleaseCompatibilityEvidence({
+      main: 'future main changed completely',
+      background: 'future background changed completely',
+      content: 'future content', chatgptDom: 'future dom', bridgeProtocol: 13
+    });
+    expect(evidence.main).toMatchObject({ baseSeams: false, refreshPendingRecovery: 'changed', mcpActivityRestore: 'changed' });
+    expect(evidence.extensionContract.compatibleShape).toBe(false);
+    expect(evidence.pluginRefresh.background.applicable).toBe(false);
+    expect(evidence.pluginRefresh.content.applicable).toBe(false);
+    expect(evidence.pluginRefresh.chatgptDom.applicable).toBe(false);
   });
 
   it('splits v2.0.9 pointer proof from keyboard proof without weakening keyboard targeting', () => {

@@ -191,6 +191,39 @@ function loadState(config) {
 }
 function saveState(config, state) { jsonWriteAtomic(statePath(config), { ...state, schema: 1 }); }
 
+function releaseIntakePath(config, info) {
+  const safeVersion = /^\d+\.\d+\.\d+$/.test(info.version) ? info.version : 'unknown';
+  const safeFingerprint = /^[a-f0-9]{64}$/.test(info.fingerprint) ? info.fingerprint.slice(0, 16) : 'unknown';
+  return path.join(config.dataDir, 'release-intake', `${safeVersion}-${safeFingerprint}.json`);
+}
+
+export async function captureUnsupportedReleaseIntake(config, info) {
+  if (config.taskBoxAddon !== true) return null;
+  try { patchRecipe(config, info.version); return null; }
+  catch (error) {
+    if (!String(error instanceof Error ? error.message : error).startsWith('TASK_BOX_UNSUPPORTED_RELEASE:')) return null;
+  }
+  const file = releaseIntakePath(config, info);
+  const existing = jsonRead(file);
+  if (existing?.kind === 'rocaniiru-cos-release-intake' && existing.version === info.version &&
+      existing.observedBundledExtensionFingerprint === info.fingerprint) {
+    return { captured: true, file, receipt: existing, reused: true };
+  }
+  try {
+    const inspectorPath = path.join(config.repoPath, 'patcher', 'task-box', 'release-intake.mjs');
+    const inspector = await import(pathToFileURL(inspectorPath).href);
+    const receipt = inspector.inspectReleaseIntake({ appPath: config.appPath, repoRoot: config.repoPath });
+    if (receipt?.kind !== 'rocaniiru-cos-release-intake' || receipt.version !== info.version) {
+      throw new Error('Release intake did not describe the observed application version');
+    }
+    const durable = { ...receipt, observedBundledExtensionFingerprint: info.fingerprint };
+    jsonWriteAtomic(file, durable);
+    return { captured: true, file, receipt: durable, reused: false };
+  } catch (error) {
+    return { captured: false, file, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export function patchRecipe(config, version) {
   if (config.taskBoxAddon === true) {
     const catalog = jsonRead(path.join(config.repoPath, 'patcher', 'task-box', 'feature.json'));
@@ -303,7 +336,7 @@ export async function ensureBootstrap(config, observedInfo = null) {
 
 const job = { busy: false, phase: 'idle', message: '', error: null, targetVersion: null };
 
-function publicStatus(config, info, state) {
+function publicStatus(config, info, state, intake = null) {
   const comparison = state.appliedVersion ? compareVersions(info.version, state.appliedVersion) : 1;
   const availability = patchAvailability(jsonRead(config.configPath,config),info,state);
   let compatibilityError = null;
@@ -323,8 +356,16 @@ function publicStatus(config, info, state) {
     message: availability.activationRequired ? 'TASK BOX package prepared. A controlled app/companion cutover is required; nothing was restarted.' :
       job.message || (comparison > 0 ? 'The app has a newer version than the applied ROCANIIRU patch.' : comparison < 0 ? 'The app is older than the recorded patch version.' : 'ROCANIIRU patch is current.'),
     error: job.error || state.lastError,
-    reloadRequired: state.reloadRequired === true
+    reloadRequired: state.reloadRequired === true,
+    releaseIntakeCaptured: intake?.captured === true,
+    releaseIntakeError: intake?.captured === false ? intake.error : null
   };
+}
+
+async function observeUpdaterState(config) {
+  const observed = await ensureBootstrap(config);
+  const intake = await captureUnsupportedReleaseIntake(config, observed.info);
+  return { ...observed, intake };
 }
 
 async function runCommand(command, args, { cwd, logFile, env, phase, message } = {}) {
@@ -505,17 +546,18 @@ async function handle(config, req, res) {
   }
   const url = new URL(req.url || '/', `http://127.0.0.1:${config.port || 8768}`);
   if (url.pathname === '/status' && req.method === 'GET') {
-    const { info, state } = await ensureBootstrap(config);
-    responseJson(res, 200, publicStatus(config, info, state), origin); return;
+    const { info, state, intake } = await observeUpdaterState(config);
+    responseJson(res, 200, publicStatus(config, info, state, intake), origin); return;
   }
   if (url.pathname === '/apply' && req.method === 'POST') {
     await startApply(config);
-    const { info, state } = await ensureBootstrap(config);
-    responseJson(res, 202, publicStatus(config, info, state), origin); return;
+    const { info, state, intake } = await observeUpdaterState(config);
+    responseJson(res, 202, publicStatus(config, info, state, intake), origin); return;
   }
   if (url.pathname === '/reload-ack' && req.method === 'POST') {
     const state = loadState(config); state.reloadRequired = false; saveState(config, state);
-    const info = appInfo(config); responseJson(res, 200, publicStatus(config, info, state), origin); return;
+    const info = appInfo(config); const intake = await captureUnsupportedReleaseIntake(config, info);
+    responseJson(res, 200, publicStatus(config, info, state, intake), origin); return;
   }
   responseJson(res, 404, { error: 'not_found' }, origin);
 }
@@ -526,7 +568,7 @@ async function main() {
   const config = JSON.parse(await readFile(configPath, 'utf8'));
   config.configPath = configPath;
   config.ports = Array.isArray(config.ports) && config.ports.length ? config.ports : DEFAULT_PORTS;
-  await ensureBootstrap(config);
+  await observeUpdaterState(config);
   const server = http.createServer((req, res) => void handle(config, req, res).catch((error) => responseJson(res, 500, { error: error instanceof Error ? error.message : String(error) }, config.extensionOrigin)));
   let bound = false;
   for (const candidate of config.ports) {
@@ -538,7 +580,7 @@ async function main() {
     if (ok) { config.port = candidate; bound = true; break; }
   }
   if (!bound) throw new Error(`No updater port available (${config.ports.join(', ')})`);
-  setInterval(() => void ensureBootstrap(config).catch((error) => {
+  setInterval(() => void observeUpdaterState(config).catch((error) => {
     const state = loadState(config); state.lastError = error instanceof Error ? error.message : String(error); saveState(config, state);
   }), 15_000).unref();
 }

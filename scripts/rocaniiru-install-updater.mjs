@@ -76,6 +76,7 @@ const bundled = path.join(appPath, 'Contents', 'Resources', 'extension');
 const bundledFingerprint = extensionFingerprint(bundled);
 const previousState = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : {};
 const previousConfig = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf8')) : {};
+const updaterScriptChanged = !existsSync(installedUpdater) || readFileSync(installedUpdater, 'utf8') !== readFileSync(sourceUpdater, 'utf8');
 if (previousState.activationRequired === true) {
   throw new Error('A runtime candidate is still awaiting activation; preserve it before reinstalling the updater.');
 }
@@ -128,7 +129,7 @@ writeJson(statePath, {
   seenBundledFingerprint: bundledFingerprint,
   appliedVersion: adoptCurrentPatch ? version : previousState.appliedVersion ?? null,
   appliedPatchCommit: adoptCurrentPatch ? patchCommit : previousState.appliedPatchCommit ?? null,
-  reloadRequired: appChanged || previousState.reloadRequired === true,
+  reloadRequired: appChanged || updaterScriptChanged || previousState.reloadRequired === true,
   lastError: previousState.lastError ?? null,
   lastAppliedAt: adoptCurrentPatch ? Date.now() : previousState.lastAppliedAt ?? null
 });

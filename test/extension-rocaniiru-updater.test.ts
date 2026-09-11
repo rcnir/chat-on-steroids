@@ -56,3 +56,12 @@ it('does not present an unknown app as up-to-date or reload an incompatible feat
   button.click(); expect(fetch).toHaveBeenCalledTimes(1);
   expect((dom!.window as any).chrome.runtime.reload).not.toHaveBeenCalled();
 });
+
+it('shows that unknown-release compatibility evidence was captured without enabling update', async () => {
+  const { document } = await openWith({ appVersion: '2.0.10', supported: false,
+    compatibilityError: 'TASK_BOX_UNSUPPORTED_RELEASE: 2.0.10', releaseIntakeCaptured: true });
+  const button = document.getElementById('rocaniiruPatchBtn') as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  expect(button.textContent).toBe('Not compatible');
+  expect(document.getElementById('rocaniiruPatchStatus')?.textContent).toContain('Compatibility evidence was captured automatically');
+});

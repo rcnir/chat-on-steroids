@@ -42,5 +42,6 @@ describe('TASK BOX updater installation preflight', () => {
     expect(h.evaluate).toThrow('FIRST_MUTATION_BOUNDARY'); expect(h.mutations).toEqual(['mkdir']);
     expect(source).toContain('...previousState,');
     expect(source).toContain('defaultPatchCommit: null');
+    expect(source).toContain('appChanged || updaterScriptChanged || previousState.reloadRequired === true');
   });
 });

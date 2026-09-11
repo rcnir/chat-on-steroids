@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 // @ts-expect-error Runtime-tested .mjs updater intentionally has no TypeScript declaration file.
-import { compareVersions, extensionFingerprint, injectUpdaterBootstrap, patchRecipe, patchAvailability, preparedRuntimeState, adoptedRuntimeState, ensureBootstrap, updaterRequestAllowed } from '../scripts/rocaniiru-updater-server.mjs';
+import { compareVersions, extensionFingerprint, injectUpdaterBootstrap, patchRecipe, patchAvailability, preparedRuntimeState, adoptedRuntimeState, ensureBootstrap, updaterRequestAllowed, captureUnsupportedReleaseIntake } from '../scripts/rocaniiru-updater-server.mjs';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -57,6 +57,15 @@ it('selects the independent addon for verified releases and never uses the legac
   }
   expect(() => patchRecipe(config, '2.0.999')).toThrow(/UNSUPPORTED_RELEASE/);
   expect(() => patchRecipe({ defaultPatchCommit: '480b425' }, '2.0.7')).toThrow();
+});
+
+it('captures unsupported-release intake fail-closed without treating it as support authority', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'rocaniiru-updater-intake-')); roots.push(root);
+  const config = { taskBoxAddon: true, repoPath: process.cwd(), dataDir: root, appPath: path.join(root, 'missing.app') };
+  expect(await captureUnsupportedReleaseIntake(config, { version: '2.0.9', fingerprint: 'a'.repeat(64) })).toBeNull();
+  const intake = await captureUnsupportedReleaseIntake(config, { version: '2.0.10', fingerprint: 'b'.repeat(64) });
+  expect(intake).toMatchObject({ captured: false });
+  expect(intake?.error).toMatch(/ENOENT|no such file/i);
 });
 
 it('supports an explicit runtime recipe and detects a new same-version patch without applying it', () => {

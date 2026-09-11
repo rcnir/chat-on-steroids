@@ -72,7 +72,11 @@
       button.disabled = true;
       button.textContent = 'Not compatible';
       note.classList.add('bad');
-      note.textContent = status.compatibilityError || 'This release has no verified adapter. No old patch will be substituted.';
+      note.textContent = status.releaseIntakeCaptured
+        ? 'Compatibility evidence was captured automatically. No old patch was substituted; review the intake before enabling TASK BOX.'
+        : status.releaseIntakeError
+          ? `Compatibility evidence capture failed: ${status.releaseIntakeError}`
+          : status.compatibilityError || 'This release has no verified adapter. No old patch will be substituted.';
       return;
     }
     if (status.activationRequired === true) {
