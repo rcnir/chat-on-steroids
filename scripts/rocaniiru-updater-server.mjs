@@ -464,31 +464,43 @@ async function startApply(config) {
 
 function responseJson(res, status, body, origin) {
   const data = JSON.stringify(body);
-  res.writeHead(status, {
+  const headers = {
     'content-type': 'application/json',
     'content-length': Buffer.byteLength(data),
     'cache-control': 'no-store',
-    'access-control-allow-origin': origin,
     'access-control-allow-methods': 'GET, POST, OPTIONS',
     'access-control-allow-headers': 'content-type',
     'access-control-allow-private-network': 'true'
-  });
+  };
+  if (origin) headers['access-control-allow-origin'] = origin;
+  res.writeHead(status, headers);
   res.end(data);
+}
+
+export function updaterRequestAllowed(config, headers = {}) {
+  const origin = headers.origin;
+  if (origin) return origin === config.extensionOrigin;
+  const expectedHost = `127.0.0.1:${config.port || 8768}`;
+  return headers.host === expectedHost &&
+    headers['sec-fetch-site'] === 'none' &&
+    headers['sec-fetch-mode'] === 'cors' &&
+    headers['sec-fetch-dest'] === 'empty';
 }
 
 async function handle(config, req, res) {
   const origin = req.headers.origin;
-  if (origin !== config.extensionOrigin) {
+  if (!updaterRequestAllowed(config, req.headers)) {
     res.writeHead(403); res.end(); return;
   }
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'access-control-allow-origin': origin,
+    const headers = {
       'access-control-allow-methods': 'GET, POST, OPTIONS',
       'access-control-allow-headers': 'content-type',
       'access-control-allow-private-network': 'true',
       'access-control-max-age': '600'
-    });
+    };
+    if (origin) headers['access-control-allow-origin'] = origin;
+    res.writeHead(204, headers);
     res.end(); return;
   }
   const url = new URL(req.url || '/', `http://127.0.0.1:${config.port || 8768}`);
