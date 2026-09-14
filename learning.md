@@ -106,6 +106,13 @@ with an unverified persistent/repeating launchd job or any helper whose recurren
 not been proven. A failed or delayed acceptance check is never permission to schedule another
 restart.
 
+On macOS, `launchctl submit` is not a proven one-shot primitive merely because the submitted
+program exits. A 2026-09-15 production cutover observed launchd retaining the submitted job and
+relaunching it after successful exit. Future cutovers must use an execution owner whose no-respawn
+lifetime is proved in advance, or explicitly remove/disarm any launchd registration before a second
+invocation could reach a mutable step. A consumed-stage/sentinel precondition is still required as
+defence in depth; it prevented every repeated invocation in that incident from reaching Quit.
+
 When the user says STOP, cease issuing new actions immediately. Then distinguish three facts in the
 report: what already happened, what is currently in flight, and what future trigger was removed.
 Removing a scheduled trigger cannot undo a restart that already executed; never report that as if

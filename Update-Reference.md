@@ -149,7 +149,7 @@ npm run patcher:intake -- \
 5. `localTag.desktopSourceSha256`を確認する。2.0.9と同一sourceならnative pointer修復のcarry-forward候補。sourceが変わっていれば、旧Swift transformをhash条件だけ緩めて通さず、公式側のfocus/click実装を比較する。公式が修復を吸収していればnative patch自体を外す。
 6. Upstream Absorption Reviewを終えてから、公開artifact digest・tag commit・main・companion・必要ならDesktop source hashを`feature.json`へ追加する。版文字列だけ追加しない。
 7. `patcher:check`、release matrix、TASK BOX/updater tests、typecheck、`git diff --check`を通した後だけcandidateをprepareする。candidate生成とlive acceptanceを同じPASSとして扱わない。
-8. live cutoverは**終了1回・置換1回・起動1回**。CoSを終了した後にCoS自身のCore/Desktop MCPへ頼らない。必要なone-shot cutover実行主体は終了前にCoS process treeの外へ確実にdetachし、persistent/repeating launchd jobは使わない。
+8. live cutoverは**終了1回・置換1回・起動1回**。CoSを終了した後にCoS自身のCore/Desktop MCPへ頼らない。必要なone-shot cutover実行主体は終了前にCoS process treeの外へ確実にdetachし、persistent/repeating launchd jobは使わない。**`launchctl submit` はone-shot primitiveとして扱わない**。2026-09-15にsuccessful exit後もjobが再起動された実機事象があるため、no-respawn lifetimeを事前に証明できる実行主体と、mutation前のconsumed-stage/sentinelを必須とする。
 9. 起動後はinstalled candidate fingerprint、固定code-signing Designated Requirement、TASK BOX/Clear durable state、updater adoption、companion reloadを確認する。TCCを推測でresetしない。
 10. acceptanceはCore / Desktop / Pluginsの実callとdurable `mcp-activity`、plugin-refresh receipt完了、Screen Recording / Accessibility granted、harmless Desktop click 1回を確認する。acceptance失敗は同じcandidateを再適用する権限ではない。原因を切り分け、必要なら新しいfeature revisionとして前進修正する。
 
@@ -312,4 +312,12 @@ macOS Desktopの `FOCUS_FAILED` はTCC identity不一致ではなく、pointer�
 
 release-intake上は既存MCP修復seamが必要に見えたが、exact `patcher:check` は2.1.11で公式側に追加された `identityRecovery.clear()` とstartup activation guardにより2.0.9用の完全一致transformを拒否した。そこで旧seamを緩めず、**2.1.11の新しい公式guard/stateを保存する版別transform**を追加した。配布物release matrixは2.0.6 / 2.0.7 / 2.0.8 / 2.0.9 / 2.1.11を全て通し、TASK BOX/updater targeted tests、typecheck、build、candidate codesign verificationも通過した。full verifyの唯一の既知失敗は、このworktreeのbundled `resources/rg/rg`ではなくhost `/opt/homebrew/bin/rg`を選ぶ既存PATH環境差で、2.1.11 adapter変更とは独立している。`mcp-shutdown`は単独PASS。
 
-本節の時点ではcandidate preparationまでであり、**live acceptanceはまだ別境界**である。実機切替後にinstalled fingerprint、固定Designated Requirement、TASK BOX/Clear state、updater/companion、Core / Desktop / Plugins activity、plugin-refresh receipt、TCC、harmless clickを再確認してからacceptance結果を追記する。
+live cutoverは2026-09-15に完了した。2.0.9の稼働bundleをrollbackとして保持したまま、事前に全体fingerprintと署名を検証した2.1.11 candidateへ **Quit 1回 / Replace 1回 / Start 1回** で直接切り替えた。稼働後のfull bundle fingerprintは `5d08a530c5c9594825c869da51a26260db16351a9b7b03e88c958d4a4f345c41`、rollback bundleは `ea896ad15f6e119c45e4b996c5a585395040649edbe5f2694c1060418b7e37dd`。Designated Requirementは `identifier "com.chatonsteroids.app" and certificate root = H"5b6a7c5a92194667f42adc4b21288aa600ac56f9"` のまま維持した。
+
+updaterは `appliedVersion:2.1.11` / `appliedPatchCommit:task-box-addon@1.0.8` / `activationRequired:false` / `reloadRequired:false` / `lastError:null` を確認した。TASK BOX Clear ledgerは切替前後でSHA-256 `7e44a84a4ff7f45620e4ab8608d4b500ab24e318a213426b18daa43552a53476` を保持し、`busy:null`、既存20 receiptは全て `completed` のまま。Chrome companionは2.1.11へ更新し、既存Chrome profileを維持してprofile switchingは行わなかった。
+
+Core / Desktop / Pluginsは2.1.11上で実callを通し、`mcp-activity` に3 surfaceのrequest/tool時刻がdurable記録された。各surfaceの新schema refreshは irreversible click を1回だけclaimした後、直後のread-backが曖昧な場合に再クリックせず `verifyOnly` を維持した。provider側がcurrentになった後に各helper pageを1回reloadして再観測し、最終的に3行すべて `completedSchemaId == schemaId` を確認した。CoreではChatGPT側に2.1.11で追加された `exec` declaration（`Allow unattributed calls enabled` を含む文面）が実際に公開されていることも確認した。
+
+macOS native backendは `screen=granted accessibility=granted execution=in-process`。Desktop UIAによるharmless browser操作も成功し、更新後もpointer pathは動作した。以上により **CoS 2.1.11 + TASK BOX 1.0.8 live acceptance = PASS** とする。
+
+切替runnerの外部所有には `launchctl submit` を使用したが、このMacではsuccessful exit後もsubmitted jobがlaunchdに残り、およそ10秒間隔で再起動された。最初のrunだけがQuit/Replace/Startへ進み、stageを消費した後の全再起動は冒頭の `verified stage missing before quit` でfail-closedしたため追加mutationは0だった。jobは直ちにlaunchd domainから削除し、以後存在しないことを確認した。**`launchctl submit` はone-shot cutover primitiveとして使用しない。** 事故事実はroot `incident.md` に分離して残す。
