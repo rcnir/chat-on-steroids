@@ -7,7 +7,8 @@ import { workerWrapper } from './extension-adapter.mjs';
 export const root = path.dirname(fileURLToPath(import.meta.url));
 const inputFiles = [
   'feature.json', 'main-adapter.mjs', 'extension-adapter.mjs', 'popup-adapter.mjs', 'loader.cjs', 'build-feature.mjs',
-  'runtime/browser-control.cjs', 'extension/browser-control-transport.js', 'extension/browser-control-driver.js'
+  'runtime/browser-control.cjs', 'extension/browser-control-transport.js', 'extension/browser-control-driver.js',
+  'extension/browser-control-guard.js'
 ];
 
 export function featureFingerprint() {
@@ -24,6 +25,7 @@ export function emitExtension(target, workerTarget = 'background.js') {
   mkdirSync(target, { recursive: true });
   copyFileSync(path.join(root, 'extension/browser-control-transport.js'), path.join(target, 'browser-control-transport.js'));
   copyFileSync(path.join(root, 'extension/browser-control-driver.js'), path.join(target, 'browser-control-driver.js'));
+  copyFileSync(path.join(root, 'extension/browser-control-guard.js'), path.join(target, 'browser-control-guard.js'));
   writeFileSync(path.join(target, 'browser-control-worker.js'), workerWrapper(workerTarget));
 }
 
