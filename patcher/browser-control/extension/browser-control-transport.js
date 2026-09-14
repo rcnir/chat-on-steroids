@@ -26,6 +26,23 @@
   const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   const text = (value, max) => typeof value === 'string' ? value.slice(0, max) : undefined;
 
+  function utf8ByteLength(value) {
+    let bytes = 0;
+    for (let index = 0; index < value.length; index += 1) {
+      const code = value.charCodeAt(index);
+      if (code < 0x80) bytes += 1;
+      else if (code < 0x800) bytes += 2;
+      else if (code >= 0xd800 && code <= 0xdbff && index + 1 < value.length) {
+        const low = value.charCodeAt(index + 1);
+        if (low >= 0xdc00 && low <= 0xdfff) {
+          bytes += 4;
+          index += 1;
+        } else bytes += 3;
+      } else bytes += 3;
+    }
+    return bytes;
+  }
+
   function normalizeResult(value) {
     if (!record(value) || typeof value.ok !== 'boolean') {
       return {
@@ -82,9 +99,7 @@
   function boundedDurableResult(result, action) {
     try {
       const encoded = JSON.stringify(result);
-      if (typeof encoded === 'string' && new TextEncoder().encode(encoded).byteLength <= MAX_DURABLE_RESULT_BYTES) {
-        return result;
-      }
+      if (typeof encoded === 'string' && utf8ByteLength(encoded) <= MAX_DURABLE_RESULT_BYTES) return result;
     } catch {
       // normalizeResult already rejected non-serializable data; keep this fail-closed anyway.
     }
@@ -195,8 +210,6 @@
           replayed: reply.data.replayed === true
         };
       }
-      // A 409 is terminal for this exact app process: either its pending command already timed
-      // out/vanished, or a mismatched replay was correctly refused. Never execute the action again.
       if (reply?.status === 409) {
         await forgetPendingResult(conversationId);
         return {
@@ -274,8 +287,6 @@
             collectedAt: command.collectedAt
           }));
         } catch (error) {
-          // Collection is the ambiguity boundary. Unless a driver can prove that no effect occurred,
-          // an exception after this point is not safe to retry as an input action.
           result = failureResult(error);
         }
         result = boundedDurableResult(result, command.action);
@@ -286,9 +297,6 @@
         await rememberPendingResult(conversationId, command.id, result);
         return await settlePendingResult(conversationId);
       } catch (error) {
-        // The official call() currently never throws, but a transport layer must remain safe if
-        // that contract changes or serialization itself fails. Never leak an unhandled rejection
-        // from the fire-and-forget activity hook.
         return transportFailure(error, { collected: false });
       }
     })().finally(() => {
