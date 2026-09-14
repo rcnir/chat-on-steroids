@@ -3,7 +3,8 @@
  *
  * Task 1 deliberately owns no browser driver. A future driver registers exactly one executor;
  * until then this transport does not collect commands, so an app-side timeout remains provably
- * "not delivered" and safe to retry. Once a command is collected it is never fetched again.
+ * "not delivered" and safe to retry. Once a command is collected its action is executed at most
+ * once; only the result envelope may be retried after bridge reply loss.
  */
 (() => {
   'use strict';
@@ -14,6 +15,7 @@
   let executor = null;
   let binding = null;
   const inFlight = new Map();
+  const pendingResults = new Map();
 
   const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   const text = (value, max) => typeof value === 'string' ? value.slice(0, max) : undefined;
@@ -29,7 +31,23 @@
       };
     }
     const out = { ok: value.ok };
-    if (record(value.data)) out.data = structuredClone(value.data);
+    if (record(value.data)) {
+      try {
+        const data = structuredClone(value.data);
+        JSON.stringify(data);
+        out.data = data;
+      } catch {
+        // Result metadata must never make the action itself execute twice. Drop unreportable data
+        // and preserve a retry-unsafe failure envelope instead.
+        return {
+          ok: false,
+          error: 'BROWSER_RESULT_INVALID',
+          detail: 'the browser executor returned non-serializable result data',
+          effect: 'unknown',
+          retrySafe: false
+        };
+      }
+    }
     const error = text(value.error, MAX_ERROR);
     const detail = text(value.detail, MAX_DETAIL);
     if (error) out.error = error;
@@ -59,16 +77,69 @@
     };
   }
 
+  async function settlePendingResult(conversationId) {
+    const pending = pendingResults.get(conversationId);
+    if (!pending) return null;
+    try {
+      const reply = await binding.call('/browser/result', {
+        method: 'POST',
+        body: JSON.stringify({ conversationId, id: pending.id, result: pending.result })
+      });
+      if (reply?.ok === true && reply.data?.ok === true) {
+        pendingResults.delete(conversationId);
+        return {
+          ok: true,
+          collected: true,
+          settled: true,
+          commandId: pending.id,
+          result: pending.result,
+          replayed: reply.data.replayed === true
+        };
+      }
+      // A 409 is terminal for this exact app process: either its pending command already timed
+      // out/vanished, or a mismatched replay was correctly refused. Never execute the action again.
+      if (reply?.status === 409) {
+        pendingResults.delete(conversationId);
+        return {
+          ok: false,
+          collected: true,
+          settled: false,
+          terminal: true,
+          commandId: pending.id,
+          result: pending.result,
+          reason: reply.data?.error || 'browser_result_rejected'
+        };
+      }
+      return {
+        ok: false,
+        collected: true,
+        settled: false,
+        commandId: pending.id,
+        result: pending.result,
+        reason: reply?.data?.error || reply?.error || 'bridge_unavailable'
+      };
+    } catch (error) {
+      return transportFailure(error, {
+        collected: true,
+        commandId: pending.id,
+        result: pending.result
+      });
+    }
+  }
+
   async function poll(rawConversationId) {
-    if (!executor || !binding) return { ok: true, collected: false, reason: 'executor_unavailable' };
+    if (!binding) return { ok: false, collected: false, reason: 'transport_unbound' };
     const conversationId = binding.cleanConversationId(rawConversationId);
     if (!conversationId) return { ok: false, collected: false, reason: 'bad_conversation_id' };
     if (inFlight.has(conversationId)) return inFlight.get(conversationId);
 
     const work = (async () => {
-      let collected = false;
-      let commandId = null;
-      let result = null;
+      // Result retry has priority and never requires a live executor. The action has already run;
+      // doing anything except settling that exact result would risk reordering or duplication.
+      const retry = await settlePendingResult(conversationId);
+      if (retry) return retry;
+      if (!executor) return { ok: true, collected: false, reason: 'executor_unavailable' };
+
       try {
         const next = await binding.call('/browser/next', {
           method: 'POST',
@@ -80,11 +151,12 @@
         const command = next.data.command;
         if (command === null || command === undefined) return { ok: true, collected: false };
         if (!record(command) || typeof command.id !== 'string' || !record(command.action)) {
-          return { ok: false, collected: false, reason: 'malformed_command' };
+          // The app has already crossed the collection boundary if it returned a command-shaped
+          // payload at all. Fail conservative: no action is attempted and no blind retry is safe.
+          return { ok: false, collected: true, settled: false, reason: 'malformed_command' };
         }
-        collected = true;
-        commandId = command.id;
 
+        let result;
         try {
           result = normalizeResult(await executor(structuredClone(command.action), {
             id: command.id,
@@ -97,22 +169,15 @@
           result = failureResult(error);
         }
 
-        const settled = await binding.call('/browser/result', {
-          method: 'POST',
-          body: JSON.stringify({ conversationId, id: command.id, result })
-        });
-        return {
-          ok: settled?.ok === true && settled.data?.ok === true,
-          collected: true,
-          settled: settled?.ok === true && settled.data?.ok === true,
-          commandId: command.id,
-          result
-        };
+        // Save before the first POST. A failed settlement may be retried on a later activity poll,
+        // but this map is never a license to call the executor again.
+        pendingResults.set(conversationId, { id: command.id, result });
+        return await settlePendingResult(conversationId);
       } catch (error) {
         // The official call() currently never throws, but a transport layer must remain safe if
         // that contract changes or serialization itself fails. Never leak an unhandled rejection
         // from the fire-and-forget activity hook.
-        return transportFailure(error, { collected, commandId, result });
+        return transportFailure(error, { collected: false });
       }
     })().finally(() => {
       if (inFlight.get(conversationId) === work) inFlight.delete(conversationId);
@@ -152,7 +217,8 @@
       protocol: PROTOCOL,
       bound: binding !== null,
       executor: executor !== null,
-      inFlight: inFlight.size
+      inFlight: inFlight.size,
+      pendingResults: pendingResults.size
     };
   }
 
