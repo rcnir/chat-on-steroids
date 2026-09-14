@@ -113,24 +113,26 @@ describe('browser control command lifecycle', () => {
 });
 
 describe('browser control production bridge path', () => {
-  it('round-trips app command -> collector -> result settlement', async () => {
+  it('round-trips app command and idempotently accepts the exact same result after reply loss', async () => {
     const h = await bridgeHarness();
+    const resultBody = { ok: true, effect: 'confirmed', data: { scrollY: 300 } };
     const pending = h.loader.runBrowserCommand(CONVERSATION, { type: 'scroll', scroll_y: 300 });
     const next = await h.call('/browser/next', { conversationId: CONVERSATION });
     expect(next).toMatchObject({ handled: true, status: 200, body: { ok: true, protocol: 1 } });
     expect(next.body.command).toMatchObject({ id: 'bc-roundtrip', action: { type: 'scroll', scroll_y: 300 } });
     expect((await h.call('/browser/next', { conversationId: CONVERSATION })).body.command).toBeNull();
 
-    const settled = await h.call('/browser/result', {
-      conversationId: CONVERSATION,
-      id: 'bc-roundtrip',
-      result: { ok: true, effect: 'confirmed', data: { scrollY: 300 } }
-    });
-    expect(settled).toMatchObject({ status: 200, body: { ok: true, accepted: true } });
+    expect(await h.call('/browser/result', {
+      conversationId: CONVERSATION, id: 'bc-roundtrip', result: resultBody
+    })).toMatchObject({ status: 200, body: { ok: true, accepted: true, replayed: false } });
     await expect(pending).resolves.toMatchObject({ ok: true, delivery: 'settled', effect: 'confirmed' });
-    expect((await h.call('/browser/result', {
-      conversationId: CONVERSATION, id: 'bc-roundtrip', result: { ok: true }
-    }))).toMatchObject({ status: 409, body: { error: 'browser_result_not_pending' } });
+
+    expect(await h.call('/browser/result', {
+      conversationId: CONVERSATION, id: 'bc-roundtrip', result: resultBody
+    })).toMatchObject({ status: 200, body: { ok: true, accepted: true, replayed: true } });
+    expect(await h.call('/browser/result', {
+      conversationId: CONVERSATION, id: 'bc-roundtrip', result: { ok: false, effect: 'unknown' }
+    })).toMatchObject({ status: 409, body: { error: 'browser_result_mismatch' } });
   });
 
   it('owns conversation validation and exact request shapes inside the addon', async () => {
@@ -139,8 +141,13 @@ describe('browser control production bridge path', () => {
     expect((await h.call('/browser/next', { conversationId: CONVERSATION, extra: true }))).toMatchObject({ status: 400, body: { error: 'bad_request' } });
     expect((await h.call('/browser/result', { conversationId: CONVERSATION, id: 'x' }))).toMatchObject({ status: 400, body: { error: 'bad_request' } });
     expect((await h.call('/browser/capabilities', undefined, 'GET')).body).toMatchObject({
-      ok: true, protocol: 1, commandLifecycle: ['queued', 'collected', 'settled'], ambiguousOutcomeIsRetryable: false
+      ok: true,
+      protocol: 1,
+      commandLifecycle: ['queued', 'collected', 'settled'],
+      ambiguousOutcomeIsRetryable: false,
+      idempotentResultReplay: true
     });
+    expect((await h.call('/browser/capabilities', {}, 'POST'))).toMatchObject({ status: 405, body: { error: 'method_not_allowed' } });
     expect((await h.call('/unrelated')).handled).toBe(false);
   });
 });
@@ -160,7 +167,7 @@ describe('companion browser-control transport', () => {
           offered = false;
           return { ok: true, data: { ok: true, protocol: 1, command } };
         }
-        return { ok: true, data: { ok: true, accepted: true } };
+        return { ok: true, data: { ok: true, accepted: true, replayed: false } };
       }
     });
 
@@ -172,7 +179,34 @@ describe('companion browser-control transport', () => {
     expect(executor).toHaveBeenCalledTimes(1);
     expect(calls.map(row => row.path)).toEqual(['/browser/next', '/browser/result']);
     expect(release()).toBe(true);
-    expect(transport.status()).toMatchObject({ bound: true, executor: false, inFlight: 0 });
+    expect(transport.status()).toMatchObject({ bound: true, executor: false, inFlight: 0, pendingResults: 0 });
+  });
+
+  it('retries only result delivery after bridge loss and never calls the executor twice', async () => {
+    const transport = await extensionHarness();
+    let resultAttempts = 0;
+    let offered = true;
+    const call = vi.fn(async (requestPath: string) => {
+      if (requestPath === '/browser/next') {
+        const command = offered ? { id: 'bc-retry', action: { type: 'click_ref', ref: 'g1_e2' } } : null;
+        offered = false;
+        return { ok: true, data: { ok: true, command } };
+      }
+      resultAttempts += 1;
+      return resultAttempts === 1
+        ? { ok: false, status: 0, error: 'app_not_found' }
+        : { ok: true, status: 200, data: { ok: true, accepted: true, replayed: true } };
+    });
+    const bound = transport.bindBackground({ cleanConversationId: (value: unknown) => value, call });
+    const executor = vi.fn(async () => ({ ok: true, effect: 'confirmed', data: { hit: true } }));
+    transport.registerExecutor(executor);
+
+    expect(await bound.poll(CONVERSATION)).toMatchObject({ collected: true, settled: false, reason: 'app_not_found' });
+    expect(transport.status()).toMatchObject({ pendingResults: 1 });
+    expect(await bound.poll(CONVERSATION)).toMatchObject({ ok: true, collected: true, settled: true, commandId: 'bc-retry' });
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(call.mock.calls.map(([requestPath]) => requestPath)).toEqual(['/browser/next', '/browser/result', '/browser/result']);
+    expect(transport.status()).toMatchObject({ pendingResults: 0 });
   });
 
   it('makes post-collection executor failure retry-unsafe by default', async () => {
@@ -183,7 +217,7 @@ describe('companion browser-control transport', () => {
       call: async (requestPath: string, init: any) => {
         if (requestPath === '/browser/next') return { ok: true, data: { ok: true, command: { id: 'bc-2', action: { type: 'click' } } } };
         reported = JSON.parse(init.body).result;
-        return { ok: true, data: { ok: true } };
+        return { ok: true, data: { ok: true, accepted: true } };
       }
     });
     transport.registerExecutor(async () => { throw new Error('driver crashed'); });
