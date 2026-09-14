@@ -50,13 +50,13 @@ export function composeBackground(source, { appVersion } = {}) {
 }
 
 /**
- * Wrapper ordering is load-bearing: transport first, driver second, official/combined worker last.
- * The driver registers exactly one executor into the Task 1 transport.
+ * Wrapper ordering is load-bearing: transport, driver, low-level navigation guard, then the
+ * official/combined worker. The driver registers exactly one executor into the Task 1 transport.
  */
 export function workerWrapper(target = 'background.js') {
   if (typeof target !== 'string' || !/^[A-Za-z0-9._-]+\.js$/.test(target)) fail('INVALID_WORKER_TARGET');
-  if (['browser-control-worker.js', 'browser-control-transport.js', 'browser-control-driver.js'].includes(target)) fail('INVALID_WORKER_TARGET');
-  return `// Generated Browser Control wrapper.\nimport './browser-control-transport.js';\nimport './browser-control-driver.js';\nimport './${target}';\n`;
+  if (['browser-control-worker.js', 'browser-control-transport.js', 'browser-control-driver.js', 'browser-control-guard.js'].includes(target)) fail('INVALID_WORKER_TARGET');
+  return `// Generated Browser Control wrapper.\nimport './browser-control-transport.js';\nimport './browser-control-driver.js';\nimport './browser-control-guard.js';\nimport './${target}';\n`;
 }
 
 /**
