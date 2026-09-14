@@ -58,7 +58,7 @@ const __rcnirBrowserControl = (() => {
 })();
 `;
 
-const ROUTE = `  if (await __rcnirBrowserControl.handleBridge({req, res, route, origin, readBody, json, tooLarge, conversationId})) return;
+const ROUTE = `  if (await __rcnirBrowserControl.handleBridge({req, res, route, origin, readBody, json, tooLarge})) return;
 `;
 
 function uniqueOffset(source, value, label) {
