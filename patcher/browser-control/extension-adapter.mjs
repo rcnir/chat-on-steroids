@@ -6,7 +6,7 @@ const BRIDGE_PROTOCOL_PREFIX = 'const BRIDGE_PROTOCOL = ';
 
 const BACKGROUND_BINDING = `// <RC-BROWSER-CONTROL:binding>\nconst __rcnirBrowserControlTransport = globalThis.CLFBrowserControlTransport?.bindBackground({\n  call,\n  cleanConversationId\n}) || null;\n// </RC-BROWSER-CONTROL:binding>\n\n`;
 
-const ACTIVITY_POLL = `    // <RC-BROWSER-CONTROL:poll>\n    // Fire-and-forget: normal ChatGPT activity must never wait on browser automation.\n    // With no registered driver Task 1 collects nothing, preserving retry-safe timeouts.\n    if (ownsDocument(source) && result.ok && __rcnirBrowserControlTransport) {\n      void __rcnirBrowserControlTransport.poll(message.conversationId);\n    }\n    // </RC-BROWSER-CONTROL:poll>\n`;
+const ACTIVITY_POLL = `    // <RC-BROWSER-CONTROL:poll>\n    // Fire-and-forget: normal ChatGPT activity must never wait on browser automation. The closure\n    // re-proves this exact document/navigation immediately before command collection/execution.\n    // Result settlement from an action that already ran is still allowed after ownership moves.\n    const __rcnirBrowserControlStillOwns = () => ownsDocument(source);\n    if (__rcnirBrowserControlStillOwns() && result.ok && __rcnirBrowserControlTransport) {\n      void __rcnirBrowserControlTransport.poll(message.conversationId, __rcnirBrowserControlStillOwns);\n    }\n    // </RC-BROWSER-CONTROL:poll>\n`;
 
 function fail(reason) {
   throw new Error(`BROWSER_CONTROL_EXTENSION_ADAPTER_${reason}`);
