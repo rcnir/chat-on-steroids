@@ -3,7 +3,7 @@
 const { randomUUID } = require('node:crypto');
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 45_000;
-const MAX_CONVERSATION_ID = 200;
+const CONVERSATION_ID = /^[0-9a-f-]{8,64}$/i;
 const MAX_COMMAND_ID = 120;
 const MAX_ERROR = 160;
 const MAX_DETAIL = 4_000;
@@ -20,8 +20,7 @@ function boundedText(value, max) {
 function normalizedConversationId(value) {
   if (typeof value !== 'string') return null;
   const id = value.trim();
-  if (!id || id.length > MAX_CONVERSATION_ID) return null;
-  return id;
+  return CONVERSATION_ID.test(id) ? id : null;
 }
 
 function normalizedAction(value) {
@@ -99,7 +98,7 @@ function createBrowserControl(options = {}) {
       return Promise.resolve({
         ok: false,
         error: 'BROWSER_BAD_COMMAND',
-        detail: 'browser commands require a conversation id and an object action',
+        detail: 'browser commands require a valid ChatGPT conversation id and an object action',
         delivery: 'not_delivered',
         effect: 'none',
         retrySafe: true
