@@ -1,11 +1,14 @@
 'use strict';
 
+const { createHash } = require('node:crypto');
 const { createBrowserControl } = require('./runtime/browser-control.cjs');
 
 const BROWSER_CONTROL_PROTOCOL = 1;
 const CONVERSATION_ID = /^[0-9a-f-]{8,64}$/i;
 const NEXT_KEYS = new Set(['conversationId']);
 const RESULT_KEYS = new Set(['conversationId', 'id', 'result']);
+const RESULT_RECEIPT_TTL_MS = 2 * 60_000;
+const MAX_RESULT_RECEIPTS = 256;
 
 function badRequest(json, res, origin, error) {
   json(res, 400, { ok: false, error }, origin);
@@ -18,17 +21,44 @@ function cleanConversationId(value) {
 }
 
 function exactKeys(value, allowed) {
-  return Object.keys(value).every(key => allowed.has(key)) && Object.keys(value).length === allowed.size;
+  const keys = Object.keys(value);
+  return keys.length === allowed.size && keys.every(key => allowed.has(key));
+}
+
+function resultDigest(value) {
+  try {
+    return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  } catch {
+    return null;
+  }
 }
 
 function createLoader(options = {}) {
   const control = createBrowserControl(options);
+  const now = typeof options.now === 'function' ? options.now : Date.now;
+  const resultReceipts = new Map();
+
+  function pruneReceipts() {
+    const cutoff = now() - RESULT_RECEIPT_TTL_MS;
+    for (const [key, receipt] of resultReceipts) {
+      if (receipt.at < cutoff) resultReceipts.delete(key);
+    }
+    while (resultReceipts.size > MAX_RESULT_RECEIPTS) {
+      const oldest = resultReceipts.keys().next().value;
+      if (oldest === undefined) break;
+      resultReceipts.delete(oldest);
+    }
+  }
 
   async function handleBridge(context) {
     const { req, res, route, origin, readBody, json, tooLarge } = context || {};
     if (!req || !res || typeof route !== 'string' || typeof json !== 'function') return false;
 
-    if (route === '/browser/capabilities' && req.method === 'GET') {
+    if (route === '/browser/capabilities') {
+      if (req.method !== 'GET') {
+        json(res, 405, { ok: false, error: 'method_not_allowed' }, origin);
+        return true;
+      }
       json(
         res,
         200,
@@ -36,7 +66,8 @@ function createLoader(options = {}) {
           ok: true,
           protocol: BROWSER_CONTROL_PROTOCOL,
           commandLifecycle: ['queued', 'collected', 'settled'],
-          ambiguousOutcomeIsRetryable: false
+          ambiguousOutcomeIsRetryable: false,
+          idempotentResultReplay: true
         },
         origin
       );
@@ -77,12 +108,29 @@ function createLoader(options = {}) {
     if (!id || id.length > 120 || !body.result || typeof body.result !== 'object' || Array.isArray(body.result)) {
       return badRequest(json, res, origin, 'bad_browser_result');
     }
+    const digest = resultDigest(body.result);
+    if (!digest) return badRequest(json, res, origin, 'bad_browser_result');
+
+    pruneReceipts();
+    const receiptKey = `${conversationId}\0${id}`;
+    const prior = resultReceipts.get(receiptKey);
+    if (prior) {
+      if (prior.digest !== digest) {
+        json(res, 409, { ok: false, error: 'browser_result_mismatch' }, origin);
+        return true;
+      }
+      json(res, 200, { ok: true, accepted: true, replayed: true }, origin);
+      return true;
+    }
+
     const accepted = control.settleBrowserCommand(conversationId, id, body.result);
     if (!accepted) {
       json(res, 409, { ok: false, error: 'browser_result_not_pending' }, origin);
       return true;
     }
-    json(res, 200, { ok: true, accepted: true }, origin);
+    resultReceipts.set(receiptKey, { digest, at: now() });
+    pruneReceipts();
+    json(res, 200, { ok: true, accepted: true, replayed: false }, origin);
     return true;
   }
 
