@@ -8,7 +8,7 @@ import { composeBackground } from '../patcher/task-box/extension-adapter.mjs';
 const repo = process.cwd();
 const adapterSource = readFileSync(path.join(repo, 'patcher/task-box/extension-adapter.mjs'), 'utf8');
 
-type SupportedVersion = '2.0.6' | '2.0.7' | '2.0.8' | '2.0.9';
+type SupportedVersion = '2.0.6' | '2.0.7' | '2.0.8' | '2.0.9' | '2.1.11';
 
 function official(appVersion: SupportedVersion) {
   return execFileSync('git', ['show', `v${appVersion}:extension/background.js`], {
@@ -38,7 +38,7 @@ function injectedBlocks(source: string) {
 }
 
 describe('TASK BOX official background composer', () => {
-  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9'] as const)('composes exact official %s at narrow seams only', (appVersion) => {
+  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.1.11'] as const)('composes exact official %s at narrow seams only', (appVersion) => {
     const source = official(appVersion);
     const output = compose(appVersion, source);
 
@@ -71,7 +71,7 @@ describe('TASK BOX official background composer', () => {
     expect(() => new Function(output)).not.toThrow();
   });
 
-  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9'] as const)('keeps official auth and document ownership around TASK BOX handling on %s', (appVersion) => {
+  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.1.11'] as const)('keeps official auth and document ownership around TASK BOX handling on %s', (appVersion) => {
     const output = compose(appVersion);
     expect(output).toContain('authorization: `Bearer ${token}`');
     expect(output).toContain('...versionHeaders(),');

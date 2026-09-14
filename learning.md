@@ -157,3 +157,14 @@ the next update starts from a reviewable diff instead of a fresh forensic sessio
 Evidence intake is not support authority. A new release still requires the published artifact
 digest, explicit catalog entry, regression tests and live acceptance before the local patch is
 allowed to run.
+
+## Marker-level compatibility evidence does not replace exact seam validation
+
+A release intake can correctly classify a feature as still needing a local repair while the exact
+surrounding upstream code has changed. Treat that as a prompt to inspect the new release, not as
+permission to widen an older text transform.
+
+The exact packaging/check step remains authoritative: if an old transform no longer matches, fail
+closed, preserve every new upstream guard/state transition, and add a release-specific transform only
+for the newly verified shape. Run the real distributed-artifact release matrix afterward so a new
+release cannot gain support by weakening compatibility checks for older ones.

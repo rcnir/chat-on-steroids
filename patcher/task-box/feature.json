@@ -45,6 +45,17 @@
       "desktopSourceSha256": "3bfc79f3aeebe66bd225e8de934a5ebfda9dde10cb5c5be0a8586142a7fc7722",
       "bundleFingerprint": "df26aa831ff4aa3efa878cd66a59e667779edcc7074e2f29cd49be77c6bbcb22",
       "extensionFingerprint": "09af342ed47eb1a5b56339f1594ae0efc33fb51628ba3d898113aa683418fc32"
+    },
+    "2.1.11": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "bridgeProtocol": 13,
+      "tagCommit": "f51acbccdd734f524799ea92bb747be765fba1e4",
+      "archiveSha256": "03954e930e4d10f48a401701fe010e04f48c62c217c482a821a38db44df40499",
+      "mainSha256": "3492b3f6614ae37c85003857f93e7d6f5003ec5de5178406d72d98729b86e4bb",
+      "desktopSourceSha256": "3bfc79f3aeebe66bd225e8de934a5ebfda9dde10cb5c5be0a8586142a7fc7722",
+      "bundleFingerprint": "fd6ade4ad2529715ac51a11cbf84b470fff7b8e4effb322bdc86e8f1789fc2be",
+      "extensionFingerprint": "f48544131fc69108ec39b41966d0a3b7bc6d60e0f606c365b09aa74a528cafd1"
     }
   }
 }

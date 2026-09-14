@@ -14,11 +14,11 @@
 
 | 管理対象 | 正本 | 意味 |
 |---|---|---|
-| 公式アプリ | 公式 release と、その配布物 | 2.0.6、2.0.7、2.0.8、2.0.9 など。companion の公式版・bridge protocol と一致させる |
+| 公式アプリ | 公式 release と、その配布物 | 2.0.6、2.0.7、2.0.8、2.0.9、2.1.11 など。companion の公式版・bridge protocol と一致させる |
 | TASK BOX 機能 | `patcher/task-box/feature.json` の `featureVersion` | Project 操作・Clear 連携・不具合修正の版。本体と独立して更新する |
 | 接続契約 | 同ファイルの `protocol`、`adapterRevision`、`releases` | TASK BOX protocol、DOM adapter、検証済みの本体・companion の組み合わせ |
 
-現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8・2.0.9**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.8`、TASK BOX protocol は `1`、adapter revision は `5` です。
+現行カタログの対象は **macOS / Apple silicon、2.0.6・2.0.7・2.0.8・2.0.9・2.1.11**。他の OS・CPU・将来版を検証済みと推定しません。機能版は `1.0.8`、TASK BOX protocol は `1`、adapter revision は `5` です。
 
 ## ソースの配置
 
@@ -28,7 +28,7 @@ patcher/task-box/
   main-adapter.mjs               公式 main への小さな接続。元の全バイトへ戻せることを検査
   extension-adapter.mjs          公式 companion の認証・document owner 境界を使う接続
   plugin-refresh-adapter.mjs     現行 ChatGPT Plugins UI への fail-closed refresh adapter
-  macos-desktop-adapter.mjs      2.0.9 の検証済み Swift source だけを狭く変換する Desktop 修復
+  macos-desktop-adapter.mjs      2.0.9 / 2.1.11 の同一検証済み Swift source だけを狭く変換する Desktop 修復
   build-feature.mjs              独立機能の生成。公式アプリ全体をビルドしない
   package.mjs                    check / prepare / apply
   loader.cjs                    公式 Clear callback と既存 receipt 保存先の接続
@@ -305,3 +305,11 @@ adapterは公式 `background.js` / `content.js` / `chatgpt-dom.js` の既知seam
 macOS Desktopの `FOCUS_FAILED` はTCC identity不一致ではなく、pointer入力にもkeyboardと同じfocused-control証明を要求していたことが原因だった。2.0.9の公式 `native/macos-desktop-helper/main.swift` をSHA-256で固定し、pointerは **frontmost application + WindowServer front window + AX focused window**、keyboard/typeはそれに **focused UI element ownership** を加えた従来の厳しい証明、と境界を分離する。変換対象sourceが既知hashと一致しなければ候補生成を拒否し、生成したarm64 dylibはcandidate bundle内だけへ配置する。TCC resetや署名identity変更は行わない。
 
 実機受け入れでは1.0.8を2.0.9へcontrolled applyし、Quit / apply / startを各1回だけ実行した。固定certificateのDesignated Requirementを維持し、updaterは `task-box-addon@1.0.8` をadopt、companion reload後は `reloadRequired:false` / `activationRequired:false`。Core / Desktop / Pluginsのrefresh receiptは全て `completedSchemaId == schemaId`、`mcp-activity`にも3 surfaceのrequest/tool時刻を記録した。macOS native backendは `screen=granted accessibility=granted execution=in-process`、ChromeのCoS extension buttonへの実クリックは最終1.0.8上で **1/1 via UIA** で成功し、`FOCUS_FAILED` は再現しなかった。
+
+## CoS 2.1.11 compatibility — TASK BOX 1.0.8 / 2026-09-15
+
+2.1.11はTASK BOX機能版を上げず、既存の1.0.8を新しい公式本体へ接続する互換性更新として扱う。公式macOS arm64 ZIPの公開SHA-256 `03954e930e4d10f48a401701fe010e04f48c62c217c482a821a38db44df40499`、tag commit `f51acbccdd734f524799ea92bb747be765fba1e4`、Bridge protocol 13、main / companion / full bundle fingerprintをfresh artifactから照合した。macOS Desktop Swift sourceは2.0.9とbyte-identicalであり、pointer/keyboard proof分離修復は同じ固定sourceへcarry-forwardする。
+
+release-intake上は既存MCP修復seamが必要に見えたが、exact `patcher:check` は2.1.11で公式側に追加された `identityRecovery.clear()` とstartup activation guardにより2.0.9用の完全一致transformを拒否した。そこで旧seamを緩めず、**2.1.11の新しい公式guard/stateを保存する版別transform**を追加した。配布物release matrixは2.0.6 / 2.0.7 / 2.0.8 / 2.0.9 / 2.1.11を全て通し、TASK BOX/updater targeted tests、typecheck、build、candidate codesign verificationも通過した。full verifyの唯一の既知失敗は、このworktreeのbundled `resources/rg/rg`ではなくhost `/opt/homebrew/bin/rg`を選ぶ既存PATH環境差で、2.1.11 adapter変更とは独立している。`mcp-shutdown`は単独PASS。
+
+本節の時点ではcandidate preparationまでであり、**live acceptanceはまだ別境界**である。実機切替後にinstalled fingerprint、固定Designated Requirement、TASK BOX/Clear state、updater/companion、Core / Desktop / Plugins activity、plugin-refresh receipt、TCC、harmless clickを再確認してからacceptance結果を追記する。

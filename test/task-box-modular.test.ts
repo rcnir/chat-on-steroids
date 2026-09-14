@@ -73,9 +73,9 @@ describe('independent TASK BOX package contract', () => {
     expect(evidence.pluginRefresh.chatgptDom.applicable).toBe(false);
   });
 
-  it('splits v2.0.9 pointer proof from keyboard proof without weakening keyboard targeting', () => {
-    const source = officialMacOSDesktopSource(process.cwd(), '2.0.9');
-    const adapted = adaptMacOSDesktopSource(source, '2.0.9');
+  it.each(['2.0.9', '2.1.11'])('splits %s pointer proof from keyboard proof without weakening keyboard targeting', (version) => {
+    const source = officialMacOSDesktopSource(process.cwd(), version);
+    const adapted = adaptMacOSDesktopSource(source, version);
     expect(adapted.adapted).toBe(true);
     expect(adapted.sourceSha256).toBe('3bfc79f3aeebe66bd225e8de934a5ebfda9dde10cb5c5be0a8586142a7fc7722');
     expect(adapted.source).toContain('private func windowTargetMatches(_ row: WindowRow) -> Bool');
@@ -105,7 +105,7 @@ describe('independent TASK BOX package contract', () => {
     expect(build).toContain("'../../package-lock.json'");
   });
 
-  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9'])('generates separate feature and upstream %s identities', version => {
+  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.1.11'])('generates separate feature and upstream %s identities', version => {
     const box: any = {};
     vm.runInNewContext(compatibilityScript(version), box);
     expect(box.CLFTaskBoxCompatibility).toMatchObject({ appVersion: version, featureVersion: '1.0.8', protocol: 1, adapterRevision: 5 });
@@ -178,11 +178,11 @@ describe.skipIf(!process.env.COS_TASK_BOX_RELEASE_TEST_ROOT)('official distribut
     await fs.writeFile(path.join(copy, 'Contents/Resources/extra-untrusted-payload'), 'not in official archive');
     expect(() => inspectOfficialApp(copy)).toThrow(/OFFICIAL_BUNDLE_HASH_MISMATCH/);
   });
-  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9'])('keeps upstream %s auth gates and executes the addon through the actual compiled handler', async version => {
+  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.1.11'])('keeps upstream %s auth gates and executes the addon through the actual compiled handler', async version => {
     const app = path.join(process.env.COS_TASK_BOX_RELEASE_TEST_ROOT!, version, 'unpacked/Chat On Steroids.app');
     const inspected = inspectOfficialApp(app);
-    expect(inspected.main.insertedBytes).toBe(version === '2.0.8' ? 943 : version === '2.0.9' ? 3574 : 673);
-    expect(inspected.main.pluginRefreshMainAdapted).toBe(version === '2.0.8' || version === '2.0.9');
+    expect(inspected.main.insertedBytes).toBe(version === '2.0.8' ? 943 : (version === '2.0.9' || version === '2.1.11') ? 3420 : 673);
+    expect(inspected.main.pluginRefreshMainAdapted).toBe(version === '2.0.8' || version === '2.0.9' || version === '2.1.11');
     const h = await harness();
     let resets = 0, barriers = 0;
     const official = vm.runInNewContext(`(${OFFICIAL_CLEAR})`, {

@@ -91,6 +91,7 @@ const PLUGIN_CLAIM_209_AFTER = `function claimPluginRefresh(input2) {
     return true;
   });
 }`;
+const MCP_RECOVERY_RELEASES = new Set(['2.0.9', '2.1.11']);
 
 const MCP_TOOL_ACTIVITY_209_BEFORE = `let toolCallSeenAt = null;
 const surfaceToolCallAt = /* @__PURE__ */ new Map();
@@ -140,6 +141,56 @@ function resetToolClock() {
   surfaceToolCallAt.clear();
   transportIdentity = { checked: false, present: false };
 }`;
+const MCP_TOOL_ACTIVITY_211_BEFORE = `let toolCallSeenAt = null;
+const surfaceToolCallAt = /* @__PURE__ */ new Map();
+function lastToolCallAt(surface) {
+  if (surface === void 0) return toolCallSeenAt;
+  return surfaceToolCallAt.get(surface) ?? null;
+}
+function resetToolClock() {
+  identityRecovery.clear();
+  toolCallSeenAt = null;
+  surfaceToolCallAt.clear();
+  transportIdentity = { checked: false, present: false };
+}`;
+const MCP_TOOL_ACTIVITY_211_AFTER = `let toolCallSeenAt = null;
+const surfaceToolCallAt = /* @__PURE__ */ new Map();
+const historicalSurfaceRequestAt = /* @__PURE__ */ new Map();
+const historicalSurfaceToolCallAt = /* @__PURE__ */ new Map();
+const mcpActivitySurfaces = /* @__PURE__ */ new Set(["core", "desktop", "plugins"]);
+function activityLatest(values) {
+  let latest = null;
+  for (const value of values.values()) if (typeof value === "number" && Number.isFinite(value) && (latest === null || value > latest)) latest = value;
+  return latest;
+}
+function snapshotMcpActivity() {
+  return { version: 1, requests: Object.fromEntries(historicalSurfaceRequestAt), tools: Object.fromEntries(historicalSurfaceToolCallAt) };
+}
+function restoreMcpActivity(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || snapshot.version !== 1) return;
+  for (const [kind, target] of [["requests", historicalSurfaceRequestAt], ["tools", historicalSurfaceToolCallAt]]) {
+    const values = snapshot[kind];
+    if (!values || typeof values !== "object" || Array.isArray(values)) continue;
+    for (const [surface, value] of Object.entries(values)) {
+      if (mcpActivitySurfaces.has(surface) && typeof value === "number" && Number.isFinite(value) && value > 0 && value <= Date.now() + 3e5) target.set(surface, value);
+    }
+  }
+}
+function noteMcpActivity(kind, surface, time) {
+  if (!mcpActivitySurfaces.has(surface) || !Number.isFinite(time) || time <= 0) return;
+  (kind === "request" ? historicalSurfaceRequestAt : historicalSurfaceToolCallAt).set(surface, time);
+  writeDurableSoon("mcp-activity", snapshotMcpActivity());
+}
+function lastToolCallAt(surface) {
+  if (surface === void 0) return toolCallSeenAt ?? activityLatest(historicalSurfaceToolCallAt);
+  return surfaceToolCallAt.get(surface) ?? historicalSurfaceToolCallAt.get(surface) ?? null;
+}
+function resetToolClock() {
+  identityRecovery.clear();
+  toolCallSeenAt = null;
+  surfaceToolCallAt.clear();
+  transportIdentity = { checked: false, present: false };
+}`;
 const MCP_TOOL_NOTE_209_BEFORE = `  surfaceToolCallAt.set(surface, Date.now());`;
 const MCP_TOOL_NOTE_209_AFTER = `  const surfaceToolSeenAt = Date.now();
   surfaceToolCallAt.set(surface, surfaceToolSeenAt);
@@ -173,6 +224,16 @@ const MCP_ACTIVITY_RESTORE_209_AFTER = `  initSessionStore(userData);
   restoreMcpActivity(await readDurable("mcp-activity"));
   if (windowActivation.isDisabled()) return;
   await restoreChatModels();`;
+const MCP_ACTIVITY_RESTORE_211_BEFORE = `  initSessionStore(userData);
+  initDurableStore(userData);
+  await restoreChatModels();
+  if (windowActivation.isDisabled()) return;`;
+const MCP_ACTIVITY_RESTORE_211_AFTER = `  initSessionStore(userData);
+  initDurableStore(userData);
+  restoreMcpActivity(await readDurable("mcp-activity"));
+  if (windowActivation.isDisabled()) return;
+  await restoreChatModels();
+  if (windowActivation.isDisabled()) return;`;
 const AUTH_SEAM = `  if (await browserDisconnected()) return json(res, 401, { error: "browser_disconnected" }, origin);
   if (!await authorised(req)) return json(res, 401, { error: "unauthorised" }, origin);
   if (!protocolCompatible(req)) {
@@ -239,29 +300,37 @@ export function adaptPluginRefreshMain(source, version) {
       adapted: true
     };
   }
-  if (version !== '2.0.9') return { source, adapted: false };
+  if (!MCP_RECOVERY_RELEASES.has(version)) return { source, adapted: false };
+  const toolActivityBefore = version === '2.1.11' ? MCP_TOOL_ACTIVITY_211_BEFORE : MCP_TOOL_ACTIVITY_209_BEFORE;
+  const toolActivityAfter = version === '2.1.11' ? MCP_TOOL_ACTIVITY_211_AFTER : MCP_TOOL_ACTIVITY_209_AFTER;
+  const restoreBefore = version === '2.1.11' ? MCP_ACTIVITY_RESTORE_211_BEFORE : MCP_ACTIVITY_RESTORE_209_BEFORE;
+  const restoreAfter = version === '2.1.11' ? MCP_ACTIVITY_RESTORE_211_AFTER : MCP_ACTIVITY_RESTORE_209_AFTER;
   let output = source;
-  output = replaceUnique(output, PLUGIN_PENDING_209_BEFORE, PLUGIN_PENDING_209_AFTER, '2.0.9 refresh pending recovery');
-  output = replaceUnique(output, PLUGIN_CLAIM_209_BEFORE, PLUGIN_CLAIM_209_AFTER, '2.0.9 refresh current reconciliation');
-  output = replaceUnique(output, MCP_TOOL_ACTIVITY_209_BEFORE, MCP_TOOL_ACTIVITY_209_AFTER, '2.0.9 MCP tool activity history');
-  output = replaceUnique(output, MCP_TOOL_NOTE_209_BEFORE, MCP_TOOL_NOTE_209_AFTER, '2.0.9 MCP tool activity note');
-  output = replaceUnique(output, MCP_REQUEST_ACTIVITY_209_BEFORE, MCP_REQUEST_ACTIVITY_209_AFTER, '2.0.9 MCP request activity history');
-  output = replaceUnique(output, MCP_REQUEST_NOTE_209_BEFORE, MCP_REQUEST_NOTE_209_AFTER, '2.0.9 MCP request activity note');
-  output = replaceUnique(output, MCP_ACTIVITY_RESTORE_209_BEFORE, MCP_ACTIVITY_RESTORE_209_AFTER, '2.0.9 MCP activity restore');
+  output = replaceUnique(output, PLUGIN_PENDING_209_BEFORE, PLUGIN_PENDING_209_AFTER, `${version} refresh pending recovery`);
+  output = replaceUnique(output, PLUGIN_CLAIM_209_BEFORE, PLUGIN_CLAIM_209_AFTER, `${version} refresh current reconciliation`);
+  output = replaceUnique(output, toolActivityBefore, toolActivityAfter, `${version} MCP tool activity history`);
+  output = replaceUnique(output, MCP_TOOL_NOTE_209_BEFORE, MCP_TOOL_NOTE_209_AFTER, `${version} MCP tool activity note`);
+  output = replaceUnique(output, MCP_REQUEST_ACTIVITY_209_BEFORE, MCP_REQUEST_ACTIVITY_209_AFTER, `${version} MCP request activity history`);
+  output = replaceUnique(output, MCP_REQUEST_NOTE_209_BEFORE, MCP_REQUEST_NOTE_209_AFTER, `${version} MCP request activity note`);
+  output = replaceUnique(output, restoreBefore, restoreAfter, `${version} MCP activity restore`);
   return { source: output, adapted: true };
 }
 
 function restorePluginRefreshMain(source, version) {
   if (version === '2.0.8') return source.replace(PLUGINS_ENROLLMENT_208_AFTER, PLUGINS_ENROLLMENT_208_BEFORE);
-  if (version !== '2.0.9') return source;
+  if (!MCP_RECOVERY_RELEASES.has(version)) return source;
+  const toolActivityBefore = version === '2.1.11' ? MCP_TOOL_ACTIVITY_211_BEFORE : MCP_TOOL_ACTIVITY_209_BEFORE;
+  const toolActivityAfter = version === '2.1.11' ? MCP_TOOL_ACTIVITY_211_AFTER : MCP_TOOL_ACTIVITY_209_AFTER;
+  const restoreBefore = version === '2.1.11' ? MCP_ACTIVITY_RESTORE_211_BEFORE : MCP_ACTIVITY_RESTORE_209_BEFORE;
+  const restoreAfter = version === '2.1.11' ? MCP_ACTIVITY_RESTORE_211_AFTER : MCP_ACTIVITY_RESTORE_209_AFTER;
   return source
     .replace(PLUGIN_PENDING_209_AFTER, PLUGIN_PENDING_209_BEFORE)
     .replace(PLUGIN_CLAIM_209_AFTER, PLUGIN_CLAIM_209_BEFORE)
-    .replace(MCP_TOOL_ACTIVITY_209_AFTER, MCP_TOOL_ACTIVITY_209_BEFORE)
+    .replace(toolActivityAfter, toolActivityBefore)
     .replace(MCP_TOOL_NOTE_209_AFTER, MCP_TOOL_NOTE_209_BEFORE)
     .replace(MCP_REQUEST_ACTIVITY_209_AFTER, MCP_REQUEST_ACTIVITY_209_BEFORE)
     .replace(MCP_REQUEST_NOTE_209_AFTER, MCP_REQUEST_NOTE_209_BEFORE)
-    .replace(MCP_ACTIVITY_RESTORE_209_AFTER, MCP_ACTIVITY_RESTORE_209_BEFORE);
+    .replace(restoreAfter, restoreBefore);
 }
 
 /** Add only a loader, a callback capture and one protected dispatch. Never rebuild upstream. */

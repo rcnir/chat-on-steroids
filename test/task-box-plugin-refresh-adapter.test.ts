@@ -10,7 +10,7 @@ const appId = 'asdk_app_synthetic';
 const pluginId = `plugin_${appId}`;
 const tools = [{ name: 'read', description: 'Read current.', inputSchema: { type: 'object' } }];
 
-type SupportedVersion = '2.0.6' | '2.0.7' | '2.0.8' | '2.0.9';
+type SupportedVersion = '2.0.6' | '2.0.7' | '2.0.8' | '2.0.9' | '2.1.11';
 
 function official(appVersion: SupportedVersion, file: string) {
   return execFileSync('git', ['show', `v${appVersion}:extension/${file}`], {
@@ -58,7 +58,7 @@ function runWorkflow(href: string, overrides: Record<string, unknown> = {}) {
 }
 
 describe('TASK BOX current ChatGPT plugin refresh adapter', () => {
-  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9'] as const)('replaces obsolete root routing on official %s without weakening exact management custody', appVersion => {
+  it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.1.11'] as const)('replaces obsolete root routing on official %s without weakening exact management custody', appVersion => {
     const output = compose(appVersion);
     expect(output.background).toContain('https://chatgpt.com/plugins?cos-plugin-refresh=${request.id}');
     expect(output.background).not.toContain('https://chatgpt.com/?cos-plugin-refresh=');
@@ -79,7 +79,7 @@ describe('TASK BOX current ChatGPT plugin refresh adapter', () => {
     expect(output.chatgptDom).toContain("hasAttribute('aria-haspopup')");
   });
 
-  it.each(['2.0.7', '2.0.8', '2.0.9'] as const)('keeps automatic plugin refresh independent from browser-only chat recovery on %s', async appVersion => {
+  it.each(['2.0.7', '2.0.8', '2.0.9', '2.1.11'] as const)('keeps automatic plugin refresh independent from browser-only chat recovery on %s', async appVersion => {
     const request = { id: requestId, surface: 'core' };
     const create = vi.fn(async (url: string) => ({ id: 8, url }));
     const context = vm.createContext({

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { releaseFor, sha256 } from './main-adapter.mjs';
 
 const SOURCE_PATH = 'native/macos-desktop-helper/main.swift';
+const POINTER_REPAIR_RELEASES = new Set(['2.0.9', '2.1.11']);
 
 function fail(reason) {
   throw new Error(`TASK_BOX_MACOS_DESKTOP_ADAPTER_${reason}`);
@@ -69,7 +70,7 @@ private func assertPointerTarget(_ id: CGWindowID) throws -> WindowRow {
 }`;
 
 /**
- * Adapt only the v2.0.9 macOS pointer-target proof.
+ * Adapt only releases whose exact pinned macOS helper source still needs the pointer-target proof.
  *
  * Keyboard and text input keep the original four-part proof. Pointer input may use the
  * three window-level authorities because a focused child control is neither necessary nor
@@ -77,7 +78,7 @@ private func assertPointerTarget(_ id: CGWindowID) throws -> WindowRow {
  */
 export function adaptMacOSDesktopSource(source, version) {
   const release = releaseFor(version);
-  if (version !== '2.0.9') return { source, adapted: false };
+  if (!POINTER_REPAIR_RELEASES.has(version)) return { source, adapted: false };
   if (typeof release.desktopSourceSha256 !== 'string' || sha256(source) !== release.desktopSourceSha256) {
     fail('OFFICIAL_SOURCE_HASH_MISMATCH');
   }
@@ -105,7 +106,7 @@ export function officialMacOSDesktopSource(repoRoot, version) {
 }
 
 export function buildPatchedMacOSDesktopLibrary({ repoRoot, version, outputDir, arch }) {
-  if (version !== '2.0.9') return null;
+  if (!POINTER_REPAIR_RELEASES.has(version)) return null;
   if (process.platform !== 'darwin' || arch !== 'arm64') fail('UNSUPPORTED_BUILD_HOST');
   const source = officialMacOSDesktopSource(repoRoot, version);
   const adapted = adaptMacOSDesktopSource(source, version);
