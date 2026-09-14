@@ -1,55 +1,77 @@
-# Independent Browser Control — Task 1 transport
+# Independent Browser Control
 
-Task 1 closes the production command/result path without adding a browser driver yet.
+Browser Control is split from upstream Chat On Steroids so frequent upstream releases remain easy to
+review. Unknown upstream versions stay fail-closed until their exact seams and published artifacts are
+verified.
 
-## Scope
+## Task 1 — production transport
 
-- app-side in-memory command lifecycle: `queued -> collected -> settled`
-- authenticated companion bridge routes: `GET /browser/capabilities`, `POST /browser/next`, `POST /browser/result`
-- companion service-worker transport with one future executor registration point
-- post-execution result outbox in existing `chrome.storage.session`, so MV3 worker recycle retries only settlement and never the action
-- exact 2.1.11 main/background composition seams
-- no native Desktop input, CGEvent, Accessibility changes, new daemon, Keychain or launchd component
+Task 1 established the app/companion command path without a browser driver:
 
-The transport intentionally **does not collect a command until a browser executor is registered**.
-That means Task 1 by itself cannot affect a page. If a queued call times out before collection, the
-result is `delivery=not_delivered`, `effect=none`, `retrySafe=true`.
+- app-side `queued -> collected -> settled` lifecycle;
+- authenticated bridge routes `/browser/capabilities`, `/browser/next`, `/browser/result`;
+- one outstanding action per conversation;
+- no command collection until an executor exists;
+- pre-collection timeout is retry-safe;
+- post-collection loss is ambiguous and mutation retry is forbidden;
+- exact result replay is idempotent;
+- post-execution results survive MV3 worker recycle in `chrome.storage.session` without restoring
+  execution authority;
+- controller document/navigation authority is re-proved before collection and before execution.
 
-Collection is the ambiguity boundary. After `/browser/next` hands an action to the extension, any
-lost result is reported app-side as `delivery=collected`, `effect=unknown`, `retrySafe=false`.
-Blindly replaying a click after that state is forbidden; the caller must observe first.
+## Task 2 — independent CDP driver and Agent Pointer
 
-After an executor returns, the normalized result is bounded and written to the existing MV3 session
-storage before the first `/browser/result` POST. If that POST or its reply is lost and Chrome recycles
-the service worker, the next worker restores only the result envelope and retries settlement. It does
-not receive authority to execute the action again. An already-executed result may settle even after
-the requesting ChatGPT document has moved on.
+Task 2 registers one browser-only executor into the Task 1 transport. It deliberately does **not**
+reuse the native Desktop driver.
 
-## Integration boundary
+Strong invariants:
 
-`main-adapter.mjs` adds one optional loader and one route dispatcher **after the official bridge's
-existing browser-disconnected, bearer-auth, protocol and rate-limit gates**. Removing those exact
-insertions must recover the upstream main bytes.
+- no CGEvent / AX / native Desktop fallback;
+- no movement of the macOS system pointer;
+- no `chrome.windows.update({focused:true})` or active-tab escalation;
+- if a background browser operation cannot work truthfully, fail rather than steal Human focus;
+- only ordinary `http:` / `https:` pages may be driven;
+- `chatgpt.com`, `chat.openai.com`, browser/extension pages, files and unknown schemes are refused;
+- a main-frame navigation onto a refused surface detaches the debugger session immediately;
+- refs are observation-generation + document-epoch scoped and are re-resolved by live DOM identity
+  before action;
+- Agent Pointer is page overlay state (`pointer-events:none`), never OS cursor state;
+- driven tabs are visibly grouped and detach removes browser-control ownership;
+- the current Chrome profile/session is used; no temporary or alternate profile is created.
 
-`extension-adapter.mjs` adds only a binding beside `HANDLERS` and a fire-and-forget poll after the
-official `/activity` request. The poll carries the official document/navigation ownership check and
-re-proves it both before command collection and after the asynchronous `/browser/next` reply, before
-an executor can run. `browser-control-transport.js` owns collection, execution handoff and durable
-result return, keeping the upstream `background.js` hook small.
+Task 2 actions currently include `navigate`, `observe`, `move_ref`, `click_ref`, `set_value`, `type`,
+`scroll`, `drag`, `back`, `forward`, `reload`, `status`, and `detach`.
 
-Task 2 will register the CDP browser driver through:
+`observe` reads semantic controls from isolated CDP worlds, traverses a bounded iframe set, mints
+stale-safe refs, and attempts a bounded screenshot. Screenshot failure/size pressure does not grant a
+fallback to native capture or foreground activation.
 
-```js
-globalThis.CLFBrowserControlTransport.registerExecutor(async (action, command) => {
-  // semantic/CDP browser action only; never native Desktop fallback
-});
-```
+## Chrome permission boundary
 
-Until that registration exists, `/browser/next` is never called by the extension.
+Chrome does not permit `debugger` to be requested as an optional permission, so Task 2 declares it in
+the composed companion manifest. `tabs` and `tabGroups` remain optional and are requested only from
+the companion popup's explicit Human gesture. No `<all_urls>` host permission is added.
+
+Revoking Browser control first detaches the driven session, then removes the optional tab permissions.
+With optional permissions absent, the driver unregisters its executor and the Task 1 transport
+collects no new browser command.
+
+## Packaging and live boundary
+
+Task 2 still builds only an isolated feature payload. It does **not** replace the installed app,
+reload the user's Chrome extension, add a model-facing tool, or perform live page mutations.
+
+Task 3 owns:
+
+- composition with the existing TASK BOX candidate path;
+- model-facing Browser tool / app command-source wiring;
+- current-profile live validation;
+- proving the macOS pointer position and Human foreground app remain unaffected during Agent work;
+- final update-regression hooks and `Update-Reference.md` integration.
 
 ## Update rule
 
 A new upstream release is unsupported until its official main/companion shape is reviewed and added
-to `feature.json`. Do not relax exact seams merely to make a new version pass. This module is kept
-separate so weekly upstream updates usually require only compatibility evidence and, if a seam truly
-changed, a small release-specific adapter update.
+to `feature.json`. Never relax exact seams merely to make a new version pass. Prefer a small
+release-specific adapter change over carrying a fork-wide upstream diff or blind-cherry-picking PR
+#142.
