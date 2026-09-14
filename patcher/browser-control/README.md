@@ -29,6 +29,8 @@ Strong invariants:
 - no CGEvent / AX / native Desktop fallback;
 - no movement of the macOS system pointer;
 - no `chrome.windows.update({focused:true})` or active-tab escalation;
+- the first navigate creates an `active:false` dedicated Agent tab in the **current Chrome profile**;
+  no existing Human web tab is silently adopted or navigated;
 - if a background browser operation cannot work truthfully, fail rather than steal Human focus;
 - only ordinary `http:` / `https:` pages may be driven;
 - `chatgpt.com`, `chat.openai.com`, browser/extension pages, files and unknown schemes are refused;
@@ -36,7 +38,8 @@ Strong invariants:
 - refs are observation-generation + document-epoch scoped and are re-resolved by live DOM identity
   before action;
 - Agent Pointer is page overlay state (`pointer-events:none`), never OS cursor state;
-- driven tabs are visibly grouped and detach removes browser-control ownership;
+- driven tabs are visibly grouped; explicit detach removes the Agent Pointer before debugger detach,
+  ungroups the tab and releases browser-control ownership;
 - the current Chrome profile/session is used; no temporary or alternate profile is created.
 
 Task 2 actions currently include `navigate`, `observe`, `move_ref`, `click_ref`, `set_value`, `type`,
