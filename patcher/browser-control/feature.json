@@ -1,0 +1,15 @@
+{
+  "featureVersion": "0.1.0",
+  "protocol": 1,
+  "adapterRevision": 1,
+  "releases": {
+    "2.1.11": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "bridgeProtocol": 13,
+      "tagCommit": "f51acbccdd734f524799ea92bb747be765fba1e4",
+      "mainSha256": "3492b3f6614ae37c85003857f93e7d6f5003ec5de5178406d72d98729b86e4bb",
+      "extensionFingerprint": "f48544131fc69108ec39b41966d0a3b7bc6d60e0f606c365b09aa74a528cafd1"
+    }
+  }
+}
