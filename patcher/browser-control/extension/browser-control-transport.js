@@ -13,7 +13,9 @@
   const STORAGE_KEY = 'rcBrowserControlPendingResultsV1';
   const MAX_ERROR = 160;
   const MAX_DETAIL = 4_000;
-  const MAX_DURABLE_RESULT_BYTES = 4 * 1024 * 1024;
+  // The official 2.1.11 bridge caps the complete HTTP body at 2 MiB. Leave ample room for the
+  // conversation/id envelope and JSON overhead; Task 2 must keep observations below this result cap.
+  const MAX_DURABLE_RESULT_BYTES = 1536 * 1024;
   let executor = null;
   let binding = null;
   let restorePromise = null;
@@ -73,8 +75,6 @@
     if (detail) out.detail = detail;
     const effect = ['confirmed', 'none', 'unknown'].includes(value.effect) ? value.effect : undefined;
     if (effect) out.effect = effect;
-    // The executor may be conservative, but it may never widen retry authority. Once collected,
-    // a failed action is retry-safe only when it explicitly proved that no effect occurred.
     if (!value.ok) out.retrySafe = value.retrySafe === true && effect === 'none';
     return out;
   }
@@ -108,7 +108,7 @@
     return {
       ok: false,
       error: 'BROWSER_RESULT_TOO_LARGE',
-      detail: `the browser result exceeded the ${MAX_DURABLE_RESULT_BYTES} byte durable transport limit`,
+      detail: `the browser result exceeded the ${MAX_DURABLE_RESULT_BYTES} byte transport limit`,
       effect: readOnly ? 'none' : 'unknown',
       retrySafe: readOnly
     };
@@ -208,7 +208,9 @@
           replayed: reply.data.replayed === true
         };
       }
-      if (reply?.status === 409) {
+      // 400/413 are structural refusals for this exact envelope; 409 means the matching app-side
+      // command/receipt no longer accepts it. None can become valid by retrying the same bytes.
+      if (reply?.status === 400 || reply?.status === 409 || reply?.status === 413) {
         await forgetPendingResult(conversationId);
         return {
           ok: false,
