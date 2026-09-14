@@ -29,7 +29,8 @@ async function harness() {
       query: vi.fn(async (query: any) => query?.groupId !== undefined ? [] : [{ ...tab }]),
       group: vi.fn(async () => groupId),
       ungroup: vi.fn(async () => undefined),
-      create: vi.fn(async () => ({ ...tab }))
+      create: vi.fn(async () => ({ ...tab })),
+      remove: vi.fn(async () => undefined)
     },
     tabGroups: {
       update: vi.fn(async () => ({ id: groupId })),
@@ -42,7 +43,7 @@ async function harness() {
       onDetach: { addListener: (fn: any) => onDetach.push(fn) },
       sendCommand: vi.fn(async (_target: any, method: string, params: any) => {
         calls.push({ method, params });
-        if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'root' }, childFrames: [] } };
+        if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'root', url: 'https://example.com/' }, childFrames: [] } };
         if (method === 'Page.createIsolatedWorld') return { executionContextId: 7 };
         if (method === 'Page.getLayoutMetrics') return {
           cssVisualViewport: { clientWidth: 800, clientHeight: 600, pageX: 0, pageY: 0 },
@@ -50,7 +51,6 @@ async function harness() {
           cssLayoutViewport: { clientWidth: 800, clientHeight: 600, pageX: 0, pageY: 0 }
         };
         if (method === 'Page.captureScreenshot') return { data: 'aGVsbG8=' };
-        if (method === 'Page.navigate') return { frameId: 'root' };
         if (method === 'Runtime.evaluate') {
           const expression = String(params?.expression || '');
           if (expression.includes('const selector=')) {
@@ -76,7 +76,7 @@ async function harness() {
   const transport = {
     registerExecutor(fn: any) { executor = fn; return () => { executor = null; return true; }; }
   };
-  const box: any = { console, chrome, structuredClone, URL, Promise, Map, Set, Error, TypeError, String, Number, JSON, Math, Object, Array, RegExp, setTimeout, clearTimeout, navigator: { userAgent: 'Macintosh' }, CLFBrowserControlTransport: transport };
+  const box: any = { console, chrome, structuredClone, URL, Promise, Map, Set, Error, TypeError, String, Number, JSON, Math, Object, Array, RegExp, Date, setTimeout, clearTimeout, navigator: { userAgent: 'Macintosh' }, CLFBrowserControlTransport: transport };
   vm.createContext(box);
   vm.runInContext(source, box);
   await Promise.resolve();
@@ -106,26 +106,31 @@ describe('independent browser driver', () => {
     expect(h.driver.refusedUrl('https://example.com/')).toBe(false);
   });
 
-  it('navigates, observes semantic refs and drives only CDP while the system pointer stays untouched', async () => {
+  it('creates an inactive dedicated Agent tab, observes refs, and drives only CDP', async () => {
     const h = await harness();
     const nav = await h.run({ type: 'navigate', url: 'https://example.com/' }, { controllerTabId: 99 });
-    expect(nav).toMatchObject({ ok: true, effect: 'confirmed' });
+    expect(nav).toMatchObject({ ok: true, effect: 'confirmed', data: { tabId: 20, created: true } });
+    expect(h.chrome.tabs.create).toHaveBeenCalledWith({ url: 'https://example.com/', active: false });
+    expect(h.chrome.tabs.query).not.toHaveBeenCalledWith({});
     expect(h.chrome.debugger.attach).toHaveBeenCalledWith({ tabId: 20 }, '1.3');
     expect(h.chrome.tabs.group).toHaveBeenCalledWith({ tabIds: [20] });
 
     const observed = await h.run({ type: 'observe' }, { controllerTabId: 99 });
     expect(observed.ok).toBe(true);
+    expect(observed.data).toMatchObject({ dedicated: true });
     expect(observed.data.elements[0]).toMatchObject({ ref: 'g1_e0', role: 'button', name: 'Go', x: 100, y: 80 });
     expect(observed.data.screenshot).toMatchObject({ mimeType: 'image/jpeg', width: 800, height: 600 });
 
     const hover = await h.run({ type: 'move_ref', ref: 'g1_e0' }, { controllerTabId: 99 });
     expect(hover).toMatchObject({ ok: true, effect: 'confirmed' });
     const click = await h.run({ type: 'click_ref', ref: 'g1_e0' }, { controllerTabId: 99 });
-    expect(click).toMatchObject({ ok: true, effect: 'confirmed' });
+    expect(click).toMatchObject({ ok: true, effect: 'unknown' });
     expect(h.calls.filter(row => row.method === 'Input.dispatchMouseEvent').map(row => row.params.type)).toEqual(expect.arrayContaining(['mouseMoved', 'mousePressed', 'mouseReleased']));
 
     const released = await h.run({ type: 'detach' });
-    expect(released.ok).toBe(true);
+    expect(released).toMatchObject({ ok: true, data: { attached: false, released: { tabId: 20, dedicated: true } } });
+    const evaluations = h.calls.filter(row => row.method === 'Runtime.evaluate').map(row => String(row.params?.expression || ''));
+    expect(evaluations.some(expression => expression.includes("__cos_agent_pointer__')?.remove"))).toBe(true);
     expect(h.chrome.debugger.detach).toHaveBeenCalledWith({ tabId: 20 });
   });
 
@@ -139,7 +144,7 @@ describe('independent browser driver', () => {
     expect(stale).toMatchObject({ ok: false, error: 'BROWSER_STALE_REF', effect: 'none', retrySafe: true });
   });
 
-  it('does not register an executor until optional tab permissions are held', async () => {
+  it('does not register an executor unless debugger and optional tab permissions are held', async () => {
     const source = await fs.readFile(DRIVER, 'utf8');
     let registered = 0;
     const chrome: any = {
@@ -147,7 +152,7 @@ describe('independent browser driver', () => {
       tabs: { query: async () => [] }, tabGroups: { query: async () => [] },
       debugger: { onDetach: { addListener() {} }, onEvent: { addListener() {} } }
     };
-    const box: any = { console, chrome, structuredClone, URL, Promise, Map, Set, Error, TypeError, String, Number, JSON, Math, Object, Array, RegExp, setTimeout, clearTimeout,
+    const box: any = { console, chrome, structuredClone, URL, Promise, Map, Set, Error, TypeError, String, Number, JSON, Math, Object, Array, RegExp, Date, setTimeout, clearTimeout,
       navigator: { userAgent: 'Macintosh' }, CLFBrowserControlTransport: { registerExecutor() { registered += 1; return () => true; } } };
     vm.createContext(box); vm.runInContext(source, box); await Promise.resolve(); await new Promise(resolve => setTimeout(resolve, 0));
     expect(registered).toBe(0);
