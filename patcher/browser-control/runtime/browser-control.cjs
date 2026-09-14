@@ -34,6 +34,10 @@ function normalizedAction(value) {
   }
 }
 
+function readOnlyAction(action) {
+  return action?.type === 'observe' || action?.type === 'status';
+}
+
 function timeoutResult(command) {
   const delivered = command.collectedAt !== null;
   return {
@@ -48,7 +52,7 @@ function timeoutResult(command) {
   };
 }
 
-function normalizeSettledResult(value) {
+function normalizeSettledResult(value, action) {
   if (!record(value) || typeof value.ok !== 'boolean') {
     return {
       ok: false,
@@ -72,9 +76,10 @@ function normalizeSettledResult(value) {
     ? value.effect
     : undefined;
   if (effect) result.effect = effect;
-  // A post-collection failure is retry-safe only when the executor explicitly proved no effect.
-  // `retrySafe: true` can never override `effect: unknown/confirmed`.
-  if (!value.ok) result.retrySafe = value.retrySafe === true && effect === 'none';
+  // Collection is the mutation ambiguity boundary. Even an executor that claims effect=none may
+  // have failed after a partial click/key/navigation path. Only read-only actions retain retry
+  // authority after collection; mutations require an observe/re-plan before another attempt.
+  if (!value.ok) result.retrySafe = readOnlyAction(action) && value.retrySafe === true && effect === 'none';
   return result;
 }
 
@@ -154,7 +159,7 @@ function createBrowserControl(options = {}) {
     if (!conversationId || !id) return false;
     const command = pending.get(conversationId);
     if (!command || command.id !== id || command.collectedAt === null) return false;
-    return finish(command, normalizeSettledResult(resultValue));
+    return finish(command, normalizeSettledResult(resultValue, command.action));
   }
 
   function abandonBrowserCommands(conversationIdValue, reason = 'the controller conversation is no longer available') {
