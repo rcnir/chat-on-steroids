@@ -25,5 +25,12 @@ Review head must prove:
 - optional tab permission removal unregisters the executor and detaches browser control;
 - only upstream 2.1.11 is supported until another exact release is reviewed.
 
+Because Chrome requires `debugger` at manifest level, the **first** live transition from the current
+companion to Browser Control may require explicit Chrome/Human approval or re-enable after the new
+permission appears. Task 3 must treat that as a one-time activation boundary, not hide it behind an
+automatic reload. Once the permission set is established, ordinary weekly upstream-version updates
+must not manufacture a new permission prompt unless the capability set genuinely changes again.
+
 Task 3 owns packaged composition with TASK BOX, model-facing tool wiring, current-profile live Chrome
-validation, Human pointer/foreground observation, and update-runbook integration.
+validation, Human pointer/foreground observation, one-time debugger-permission activation, and
+update-runbook integration.
