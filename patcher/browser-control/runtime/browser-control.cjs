@@ -68,8 +68,13 @@ function normalizeSettledResult(value) {
   const detail = boundedText(value.detail, MAX_DETAIL);
   if (error) result.error = error;
   if (detail) result.detail = detail;
-  if (value.effect === 'confirmed' || value.effect === 'none' || value.effect === 'unknown') result.effect = value.effect;
-  if (typeof value.retrySafe === 'boolean') result.retrySafe = value.retrySafe;
+  const effect = value.effect === 'confirmed' || value.effect === 'none' || value.effect === 'unknown'
+    ? value.effect
+    : undefined;
+  if (effect) result.effect = effect;
+  // A post-collection failure is retry-safe only when the executor explicitly proved no effect.
+  // `retrySafe: true` can never override `effect: unknown/confirmed`.
+  if (!value.ok) result.retrySafe = value.retrySafe === true && effect === 'none';
   return result;
 }
 
