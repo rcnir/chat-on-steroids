@@ -65,6 +65,16 @@
     return { ok: false, error: code, detail, effect, retrySafe };
   }
 
+  function staleControllerResult() {
+    return {
+      ok: false,
+      error: 'BROWSER_CONTROLLER_STALE',
+      detail: 'the ChatGPT document that requested browser control changed before execution; no browser action was attempted',
+      effect: 'none',
+      retrySafe: true
+    };
+  }
+
   function transportFailure(error, { collected, commandId, result } = {}) {
     return {
       ok: false,
@@ -75,6 +85,11 @@
       reason: 'transport_failed',
       detail: text(error?.message, MAX_DETAIL) || String(error ?? 'browser transport failed').slice(0, MAX_DETAIL)
     };
+  }
+
+  function authorityCurrent(check) {
+    if (typeof check !== 'function') return true;
+    try { return check() === true; } catch { return false; }
   }
 
   async function settlePendingResult(conversationId) {
@@ -127,18 +142,21 @@
     }
   }
 
-  async function poll(rawConversationId) {
+  async function poll(rawConversationId, stillOwnsController) {
     if (!binding) return { ok: false, collected: false, reason: 'transport_unbound' };
     const conversationId = binding.cleanConversationId(rawConversationId);
     if (!conversationId) return { ok: false, collected: false, reason: 'bad_conversation_id' };
     if (inFlight.has(conversationId)) return inFlight.get(conversationId);
 
     const work = (async () => {
-      // Result retry has priority and never requires a live executor. The action has already run;
-      // doing anything except settling that exact result would risk reordering or duplication.
+      // Result retry has priority and remains valid after the controller document changes: the
+      // action has already run, and settlement is the only safe operation left for that command.
       const retry = await settlePendingResult(conversationId);
       if (retry) return retry;
       if (!executor) return { ok: true, collected: false, reason: 'executor_unavailable' };
+      if (!authorityCurrent(stillOwnsController)) {
+        return { ok: false, collected: false, reason: 'stale_controller' };
+      }
 
       try {
         const next = await binding.call('/browser/next', {
@@ -154,6 +172,15 @@
           // The app has already crossed the collection boundary if it returned a command-shaped
           // payload at all. Fail conservative: no action is attempted and no blind retry is safe.
           return { ok: false, collected: true, settled: false, reason: 'malformed_command' };
+        }
+
+        // The /browser/next await is an async ownership boundary. A navigation or replacement
+        // document may have won while the app was answering. Once collected, settle an explicit
+        // no-effect result rather than executing from stale authority or leaving an ambiguous timeout.
+        if (!authorityCurrent(stillOwnsController)) {
+          const result = staleControllerResult();
+          pendingResults.set(conversationId, { id: command.id, result });
+          return await settlePendingResult(conversationId);
         }
 
         let result;
