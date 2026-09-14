@@ -86,11 +86,13 @@ async function harness() {
 }
 
 describe('independent browser driver', () => {
-  it('contains no OS-focus or active-tab escalation path', async () => {
+  it('contains no OS-pointer or foreground-escalation implementation', async () => {
     const source = await fs.readFile(DRIVER, 'utf8');
     expect(source).not.toContain('chrome.windows.update');
-    expect(source).not.toContain('active: true');
-    expect(source).not.toMatch(/CGEvent|AXUIElement|SendInput|native Desktop/i);
+    expect(source).not.toContain('chrome.tabs.update');
+    expect(source).not.toContain('CGEvent');
+    expect(source).not.toContain('AXUIElement');
+    expect(source).not.toContain('SendInput');
     expect(source).toContain('Input.dispatchMouseEvent');
     expect(source).toContain('pointer-events:none');
   });
@@ -160,5 +162,6 @@ describe('Task 2 manifest and worker contract', () => {
     expect(out.optional_permissions).toEqual(expect.arrayContaining(['tabs', 'tabGroups']));
     expect(JSON.stringify(out)).not.toContain('<all_urls>');
     expect(workerWrapper()).toContain("import './browser-control-transport.js';\nimport './browser-control-driver.js';\nimport './background.js';");
+    expect(workerWrapper()).toContain("import './browser-control-guard.js';");
   });
 });
