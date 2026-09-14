@@ -8,12 +8,15 @@ Review head must prove:
 - browser actions execute only through Chrome DevTools Protocol;
 - no CGEvent, AX, SendInput, native Desktop fallback, system-pointer movement, Chrome-window focus or
   active-tab escalation exists in the Browser route;
+- the first navigate creates a dedicated `active:false` Agent tab in the current Chrome profile and
+  never silently adopts/navigates an existing Human web tab;
 - `debugger` is required by the composed manifest while `tabs` / `tabGroups` remain optional and
   Human-granted from the popup;
 - no `<all_urls>` host permission is added;
 - ChatGPT hosts, non-http(s), file/browser/extension surfaces are refused before attachment;
 - a driven main frame that later reaches a refused surface is detached immediately;
-- one driven tab/session is visible through a named tab group and `detach` releases it;
+- the driven Agent tab/session is visible through a named tab group and explicit `detach` removes
+  the Agent Pointer before debugger detach, ungroups the tab and releases ownership;
 - semantic refs are observation-generation + document-epoch scoped, re-resolved at action time, and
   fail closed when their live identity changed, disappeared, became disabled or became covered;
 - Agent Pointer is logical/page overlay state with `pointer-events:none`, independent of the OS cursor;
