@@ -47,6 +47,18 @@
     return { ok: false, error: code, detail, effect, retrySafe };
   }
 
+  function transportFailure(error, { collected, commandId, result } = {}) {
+    return {
+      ok: false,
+      collected: collected === true,
+      settled: false,
+      ...(commandId ? { commandId } : {}),
+      ...(result ? { result } : {}),
+      reason: 'transport_failed',
+      detail: text(error?.message, MAX_DETAIL) || String(error ?? 'browser transport failed').slice(0, MAX_DETAIL)
+    };
+  }
+
   async function poll(rawConversationId) {
     if (!executor || !binding) return { ok: true, collected: false, reason: 'executor_unavailable' };
     const conversationId = binding.cleanConversationId(rawConversationId);
@@ -54,43 +66,54 @@
     if (inFlight.has(conversationId)) return inFlight.get(conversationId);
 
     const work = (async () => {
-      const next = await binding.call('/browser/next', {
-        method: 'POST',
-        body: JSON.stringify({ conversationId })
-      });
-      if (!next?.ok || next.data?.ok !== true) {
-        return { ok: false, collected: false, reason: next?.data?.error || next?.error || 'bridge_unavailable' };
-      }
-      const command = next.data.command;
-      if (command === null || command === undefined) return { ok: true, collected: false };
-      if (!record(command) || typeof command.id !== 'string' || !record(command.action)) {
-        return { ok: false, collected: false, reason: 'malformed_command' };
-      }
-
-      let result;
+      let collected = false;
+      let commandId = null;
+      let result = null;
       try {
-        result = normalizeResult(await executor(structuredClone(command.action), {
-          id: command.id,
-          conversationId,
-          collectedAt: command.collectedAt
-        }));
-      } catch (error) {
-        // Collection is the ambiguity boundary. Unless a driver can prove that no effect occurred,
-        // an exception after this point is not safe to retry as an input action.
-        result = failureResult(error);
-      }
+        const next = await binding.call('/browser/next', {
+          method: 'POST',
+          body: JSON.stringify({ conversationId })
+        });
+        if (!next?.ok || next.data?.ok !== true) {
+          return { ok: false, collected: false, reason: next?.data?.error || next?.error || 'bridge_unavailable' };
+        }
+        const command = next.data.command;
+        if (command === null || command === undefined) return { ok: true, collected: false };
+        if (!record(command) || typeof command.id !== 'string' || !record(command.action)) {
+          return { ok: false, collected: false, reason: 'malformed_command' };
+        }
+        collected = true;
+        commandId = command.id;
 
-      const settled = await binding.call('/browser/result', {
-        method: 'POST',
-        body: JSON.stringify({ conversationId, id: command.id, result })
-      });
-      return {
-        ok: settled?.ok === true && settled.data?.ok === true,
-        collected: true,
-        settled: settled?.ok === true && settled.data?.ok === true,
-        commandId: command.id,
-        result
-      };
+        try {
+          result = normalizeResult(await executor(structuredClone(command.action), {
+            id: command.id,
+            conversationId,
+            collectedAt: command.collectedAt
+          }));
+        } catch (error) {
+          // Collection is the ambiguity boundary. Unless a driver can prove that no effect occurred,
+          // an exception after this point is not safe to retry as an input action.
+          result = failureResult(error);
+        }
+
+        const settled = await binding.call('/browser/result', {
+          method: 'POST',
+          body: JSON.stringify({ conversationId, id: command.id, result })
+        });
+        return {
+          ok: settled?.ok === true && settled.data?.ok === true,
+          collected: true,
+          settled: settled?.ok === true && settled.data?.ok === true,
+          commandId: command.id,
+          result
+        };
+      } catch (error) {
+        // The official call() currently never throws, but a transport layer must remain safe if
+        // that contract changes or serialization itself fails. Never leak an unhandled rejection
+        // from the fire-and-forget activity hook.
+        return transportFailure(error, { collected, commandId, result });
+      }
     })().finally(() => {
       if (inFlight.get(conversationId) === work) inFlight.delete(conversationId);
     });
