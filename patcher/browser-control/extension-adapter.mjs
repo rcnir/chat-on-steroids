@@ -4,7 +4,9 @@ const HANDLERS_SEAM = 'const HANDLERS = {\n';
 const ACTIVITY_RESULT_SEAM = '    const result = await call(`/activity${query}`);\n';
 const BRIDGE_PROTOCOL_PREFIX = 'const BRIDGE_PROTOCOL = ';
 
-const BACKGROUND_BINDING = `// <RC-BROWSER-CONTROL:binding>\nconst __rcnirBrowserControlTransport = globalThis.CLFBrowserControlTransport?.bindBackground({\n  call,\n  cleanConversationId,\n  sessionStorage: chrome.storage.session\n}) || null;\n// </RC-BROWSER-CONTROL:binding>\n\n`;
+const BACKGROUND_BINDING = `// <RC-BROWSER-CONTROL:binding>\nconst __rcnirBrowserControlTransport = globalThis.CLFBrowserControlTransport?.bindBackground({\n  call,\n  cleanConversationId,\n  sessionStorage: chrome.storage.session\n}) || null;\nconst __rcnirBrowserControlDriver = globalThis.CLFBrowserControlDriver || null;\nfunction __rcnirBrowserControlPopupOwner(sender) {\n  return sender?.id === chrome.runtime.id && sender?.url === chrome.runtime.getURL('popup.html') &&\n    (sender.frameId === undefined || sender.frameId === 0);\n}\n// </RC-BROWSER-CONTROL:binding>\n\n`;
+
+const BROWSER_HANDLERS = `  // <RC-BROWSER-CONTROL:handlers>\n  async browser_control_status(_message, sender) {\n    if (!__rcnirBrowserControlPopupOwner(sender) || !__rcnirBrowserControlDriver) return { ok: false, error: 'invalid_browser_control_owner' };\n    return { ok: true, ...(await __rcnirBrowserControlDriver.status()), transport: globalThis.CLFBrowserControlTransport?.status?.() || null };\n  },\n  async browser_control_detach(_message, sender) {\n    if (!__rcnirBrowserControlPopupOwner(sender) || !__rcnirBrowserControlDriver) return { ok: false, error: 'invalid_browser_control_owner' };\n    return { ok: true, ...(await __rcnirBrowserControlDriver.detach()) };\n  },\n  // </RC-BROWSER-CONTROL:handlers>\n`;
 
 const ACTIVITY_POLL = `    // <RC-BROWSER-CONTROL:poll>\n    // Fire-and-forget: normal ChatGPT activity must never wait on browser automation. The closure\n    // re-proves this exact document/navigation immediately before command collection/execution.\n    // Result settlement from an action that already ran is still allowed after ownership moves.\n    const __rcnirBrowserControlStillOwns = () => ownsDocument(source);\n    if (__rcnirBrowserControlStillOwns() && result.ok && __rcnirBrowserControlTransport) {\n      void __rcnirBrowserControlTransport.poll(message.conversationId, __rcnirBrowserControlStillOwns);\n    }\n    // </RC-BROWSER-CONTROL:poll>\n`;
 
@@ -38,26 +40,29 @@ function validateContract(source, appVersion) {
   requireUnique(source, 'async activity(message, _sender, source) {', 'ACTIVITY_SEAM_DRIFT');
 }
 
-/** Compose only two thin hooks into the verified companion background source. */
+/** Compose only thin hooks into the verified companion background source. */
 export function composeBackground(source, { appVersion } = {}) {
   if (!Object.hasOwn(feature.releases, appVersion)) fail('UNSUPPORTED_APP_VERSION');
   validateContract(source, appVersion);
-  let output = source.replace(HANDLERS_SEAM, `${BACKGROUND_BINDING}${HANDLERS_SEAM}`);
+  let output = source.replace(HANDLERS_SEAM, `${BACKGROUND_BINDING}${HANDLERS_SEAM}${BROWSER_HANDLERS}`);
   output = output.replace(ACTIVITY_RESULT_SEAM, `${ACTIVITY_RESULT_SEAM}${ACTIVITY_POLL}`);
   return output;
 }
 
 /**
- * Standalone worker wrapper for Task 1/2 packaging. Combined addon packaging may point target at
- * another module worker (for example task-box-worker.js) without changing the transport itself.
+ * Wrapper ordering is load-bearing: transport first, driver second, official/combined worker last.
+ * The driver registers exactly one executor into the Task 1 transport.
  */
 export function workerWrapper(target = 'background.js') {
   if (typeof target !== 'string' || !/^[A-Za-z0-9._-]+\.js$/.test(target)) fail('INVALID_WORKER_TARGET');
-  if (target === 'browser-control-worker.js' || target === 'browser-control-transport.js') fail('INVALID_WORKER_TARGET');
-  return `// Generated Browser Control wrapper; keep transport before the official/combined worker.\nimport './browser-control-transport.js';\nimport './${target}';\n`;
+  if (['browser-control-worker.js', 'browser-control-transport.js', 'browser-control-driver.js'].includes(target)) fail('INVALID_WORKER_TARGET');
+  return `// Generated Browser Control wrapper.\nimport './browser-control-transport.js';\nimport './browser-control-driver.js';\nimport './${target}';\n`;
 }
 
-/** Change only the module service-worker entry; Task 1 needs no new Chrome permission. */
+/**
+ * `debugger` cannot be optional in Chrome. tabs/tabGroups remain optional and are requested only
+ * from the popup's user gesture. No all-URLs host permission is added.
+ */
 export function composeManifest(original, { appVersion, worker = 'browser-control-worker.js' } = {}) {
   const release = releaseFor(appVersion);
   if (!original || typeof original !== 'object' || Array.isArray(original) || original.version !== appVersion ||
@@ -66,6 +71,8 @@ export function composeManifest(original, { appVersion, worker = 'browser-contro
   }
   if (!Number.isSafeInteger(release.bridgeProtocol)) fail('INVALID_BRIDGE_CONTRACT');
   const out = structuredClone(original);
+  out.permissions = [...new Set([...(Array.isArray(out.permissions) ? out.permissions : []), 'debugger'])];
+  out.optional_permissions = [...new Set([...(Array.isArray(out.optional_permissions) ? out.optional_permissions : []), 'tabs', 'tabGroups'])];
   out.background = { service_worker: worker, type: 'module' };
   return out;
 }
