@@ -40,7 +40,6 @@ function validateContract(source, appVersion) {
   requireUnique(source, 'async activity(message, _sender, source) {', 'ACTIVITY_SEAM_DRIFT');
 }
 
-/** Compose only thin hooks into the verified companion background source. */
 export function composeBackground(source, { appVersion } = {}) {
   if (!Object.hasOwn(feature.releases, appVersion)) fail('UNSUPPORTED_APP_VERSION');
   validateContract(source, appVersion);
@@ -50,19 +49,17 @@ export function composeBackground(source, { appVersion } = {}) {
 }
 
 /**
- * Wrapper ordering is load-bearing: transport, driver, low-level navigation guard, then the
- * official/combined worker. The driver registers exactly one executor into the Task 1 transport.
+ * Browser action authority cannot exist until transport + driver are loaded. The guard may load
+ * after the official worker because no browser command can be collected during module startup;
+ * this preserves the Task 1 wrapper prefix while still fencing every later navigation event.
  */
 export function workerWrapper(target = 'background.js') {
   if (typeof target !== 'string' || !/^[A-Za-z0-9._-]+\.js$/.test(target)) fail('INVALID_WORKER_TARGET');
   if (['browser-control-worker.js', 'browser-control-transport.js', 'browser-control-driver.js', 'browser-control-guard.js'].includes(target)) fail('INVALID_WORKER_TARGET');
-  return `// Generated Browser Control wrapper.\nimport './browser-control-transport.js';\nimport './browser-control-driver.js';\nimport './browser-control-guard.js';\nimport './${target}';\n`;
+  return `// Generated Browser Control wrapper.\nimport './browser-control-transport.js';\nimport './browser-control-driver.js';\nimport './${target}';\nimport './browser-control-guard.js';\n`;
 }
 
-/**
- * `debugger` cannot be optional in Chrome. tabs/tabGroups remain optional and are requested only
- * from the popup's user gesture. No all-URLs host permission is added.
- */
+/** `debugger` is required; tabs/tabGroups stay runtime optional. No all-URLs host grant. */
 export function composeManifest(original, { appVersion, worker = 'browser-control-worker.js' } = {}) {
   const release = releaseFor(appVersion);
   if (!original || typeof original !== 'object' || Array.isArray(original) || original.version !== appVersion ||
