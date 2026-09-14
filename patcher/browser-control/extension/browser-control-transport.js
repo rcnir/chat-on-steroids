@@ -13,8 +13,6 @@
   const STORAGE_KEY = 'rcBrowserControlPendingResultsV1';
   const MAX_ERROR = 160;
   const MAX_DETAIL = 4_000;
-  // chrome.storage.session is shared with the official recorder. Bound one result so browser
-  // control cannot consume the whole session quota; Task 2 must keep ordinary observations below it.
   const MAX_DURABLE_RESULT_BYTES = 4 * 1024 * 1024;
   let executor = null;
   let binding = null;
@@ -73,8 +71,11 @@
     const detail = text(value.detail, MAX_DETAIL);
     if (error) out.error = error;
     if (detail) out.detail = detail;
-    if (['confirmed', 'none', 'unknown'].includes(value.effect)) out.effect = value.effect;
-    if (typeof value.retrySafe === 'boolean') out.retrySafe = value.retrySafe;
+    const effect = ['confirmed', 'none', 'unknown'].includes(value.effect) ? value.effect : undefined;
+    if (effect) out.effect = effect;
+    // The executor may be conservative, but it may never widen retry authority. Once collected,
+    // a failed action is retry-safe only when it explicitly proved that no effect occurred.
+    if (!value.ok) out.retrySafe = value.retrySafe === true && effect === 'none';
     return out;
   }
 
@@ -82,7 +83,7 @@
     const code = text(error?.code, MAX_ERROR) || 'BROWSER_ACTION_FAILED';
     const detail = text(error?.message, MAX_DETAIL) || String(error ?? 'browser action failed').slice(0, MAX_DETAIL);
     const effect = ['confirmed', 'none', 'unknown'].includes(error?.effect) ? error.effect : 'unknown';
-    const retrySafe = typeof error?.retrySafe === 'boolean' ? error.retrySafe : effect === 'none';
+    const retrySafe = typeof error?.retrySafe === 'boolean' ? error.retrySafe && effect === 'none' : effect === 'none';
     return { ok: false, error: code, detail, effect, retrySafe };
   }
 
@@ -166,7 +167,6 @@
       for (const [rawConversationId, row] of Object.entries(state.rows)) {
         const conversationId = binding.cleanConversationId(rawConversationId);
         if (!conversationId || !record(row) || typeof row.id !== 'string' || !record(row.result) || typeof row.result.ok !== 'boolean') continue;
-        // In-memory work from this same worker is newer than a storage snapshot queued before it.
         if (!pendingResults.has(conversationId)) {
           pendingResults.set(conversationId, { id: row.id.slice(0, 120), result: structuredClone(row.result) });
         }
@@ -181,8 +181,6 @@
 
   async function rememberPendingResult(conversationId, id, result) {
     pendingResults.set(conversationId, { id, result });
-    // Best effort cannot change the semantic result: even if storage is temporarily unavailable,
-    // the live worker still attempts immediate settlement. Persistence only closes the recycle gap.
     await queueStorageWrite();
   }
 
@@ -247,8 +245,6 @@
     if (inFlight.has(conversationId)) return inFlight.get(conversationId);
 
     const work = (async () => {
-      // Result retry has priority and remains valid after the controller document changes: the
-      // action has already run, and settlement is the only safe operation left for that command.
       const retry = await settlePendingResult(conversationId);
       if (retry) return retry;
       if (!executor) return { ok: true, collected: false, reason: 'executor_unavailable' };
@@ -270,9 +266,6 @@
           return { ok: false, collected: true, settled: false, reason: 'malformed_command' };
         }
 
-        // The /browser/next await is an async ownership boundary. A navigation or replacement
-        // document may have won while the app was answering. Once collected, settle an explicit
-        // no-effect result rather than executing from stale authority or leaving an ambiguous timeout.
         if (!authorityCurrent(stillOwnsController)) {
           const result = staleControllerResult();
           await rememberPendingResult(conversationId, command.id, result);
@@ -290,10 +283,6 @@
           result = failureResult(error);
         }
         result = boundedDurableResult(result, command.action);
-
-        // Persist before the first result POST. If the MV3 worker is recycled after the page action,
-        // the next worker restores only this result envelope; it never receives authority to execute
-        // the action again.
         await rememberPendingResult(conversationId, command.id, result);
         return await settlePendingResult(conversationId);
       } catch (error) {
