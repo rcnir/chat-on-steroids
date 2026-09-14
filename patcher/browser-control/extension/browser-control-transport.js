@@ -10,10 +10,16 @@
   'use strict';
 
   const PROTOCOL = 1;
+  const STORAGE_KEY = 'rcBrowserControlPendingResultsV1';
   const MAX_ERROR = 160;
   const MAX_DETAIL = 4_000;
+  // chrome.storage.session is shared with the official recorder. Bound one result so browser
+  // control cannot consume the whole session quota; Task 2 must keep ordinary observations below it.
+  const MAX_DURABLE_RESULT_BYTES = 4 * 1024 * 1024;
   let executor = null;
   let binding = null;
+  let restorePromise = null;
+  let storageChain = Promise.resolve();
   const inFlight = new Map();
   const pendingResults = new Map();
 
@@ -37,8 +43,6 @@
         JSON.stringify(data);
         out.data = data;
       } catch {
-        // Result metadata must never make the action itself execute twice. Drop unreportable data
-        // and preserve a retry-unsafe failure envelope instead.
         return {
           ok: false,
           error: 'BROWSER_RESULT_INVALID',
@@ -75,6 +79,25 @@
     };
   }
 
+  function boundedDurableResult(result, action) {
+    try {
+      const encoded = JSON.stringify(result);
+      if (typeof encoded === 'string' && new TextEncoder().encode(encoded).byteLength <= MAX_DURABLE_RESULT_BYTES) {
+        return result;
+      }
+    } catch {
+      // normalizeResult already rejected non-serializable data; keep this fail-closed anyway.
+    }
+    const readOnly = action?.type === 'observe' || action?.type === 'status';
+    return {
+      ok: false,
+      error: 'BROWSER_RESULT_TOO_LARGE',
+      detail: `the browser result exceeded the ${MAX_DURABLE_RESULT_BYTES} byte durable transport limit`,
+      effect: readOnly ? 'none' : 'unknown',
+      retrySafe: readOnly
+    };
+  }
+
   function transportFailure(error, { collected, commandId, result } = {}) {
     return {
       ok: false,
@@ -92,6 +115,67 @@
     try { return check() === true; } catch { return false; }
   }
 
+  function storageAvailable() {
+    const storage = binding?.sessionStorage;
+    return Boolean(storage && typeof storage.get === 'function' && typeof storage.set === 'function' && typeof storage.remove === 'function');
+  }
+
+  function pendingSnapshot() {
+    return {
+      version: 1,
+      rows: Object.fromEntries(
+        [...pendingResults.entries()].map(([conversationId, pending]) => [
+          conversationId,
+          { id: pending.id, result: pending.result }
+        ])
+      )
+    };
+  }
+
+  function queueStorageWrite() {
+    if (!storageAvailable()) return Promise.resolve(false);
+    storageChain = storageChain.catch(() => undefined).then(async () => {
+      if (pendingResults.size === 0) await binding.sessionStorage.remove(STORAGE_KEY);
+      else await binding.sessionStorage.set({ [STORAGE_KEY]: pendingSnapshot() });
+    });
+    return storageChain.then(() => true, () => false);
+  }
+
+  async function restorePendingResults() {
+    if (!storageAvailable()) return false;
+    if (restorePromise) return restorePromise;
+    restorePromise = (async () => {
+      const saved = await binding.sessionStorage.get(STORAGE_KEY);
+      const state = saved?.[STORAGE_KEY];
+      if (!record(state) || state.version !== 1 || !record(state.rows)) return true;
+      for (const [rawConversationId, row] of Object.entries(state.rows)) {
+        const conversationId = binding.cleanConversationId(rawConversationId);
+        if (!conversationId || !record(row) || typeof row.id !== 'string' || !record(row.result) || typeof row.result.ok !== 'boolean') continue;
+        // In-memory work from this same worker is newer than a storage snapshot queued before it.
+        if (!pendingResults.has(conversationId)) {
+          pendingResults.set(conversationId, { id: row.id.slice(0, 120), result: structuredClone(row.result) });
+        }
+      }
+      return true;
+    })().catch(() => {
+      restorePromise = null;
+      return false;
+    });
+    return restorePromise;
+  }
+
+  async function rememberPendingResult(conversationId, id, result) {
+    pendingResults.set(conversationId, { id, result });
+    // Best effort cannot change the semantic result: even if storage is temporarily unavailable,
+    // the live worker still attempts immediate settlement. Persistence only closes the recycle gap.
+    await queueStorageWrite();
+  }
+
+  async function forgetPendingResult(conversationId) {
+    pendingResults.delete(conversationId);
+    await queueStorageWrite();
+  }
+
   async function settlePendingResult(conversationId) {
     const pending = pendingResults.get(conversationId);
     if (!pending) return null;
@@ -101,7 +185,7 @@
         body: JSON.stringify({ conversationId, id: pending.id, result: pending.result })
       });
       if (reply?.ok === true && reply.data?.ok === true) {
-        pendingResults.delete(conversationId);
+        await forgetPendingResult(conversationId);
         return {
           ok: true,
           collected: true,
@@ -114,7 +198,7 @@
       // A 409 is terminal for this exact app process: either its pending command already timed
       // out/vanished, or a mismatched replay was correctly refused. Never execute the action again.
       if (reply?.status === 409) {
-        pendingResults.delete(conversationId);
+        await forgetPendingResult(conversationId);
         return {
           ok: false,
           collected: true,
@@ -146,6 +230,7 @@
     if (!binding) return { ok: false, collected: false, reason: 'transport_unbound' };
     const conversationId = binding.cleanConversationId(rawConversationId);
     if (!conversationId) return { ok: false, collected: false, reason: 'bad_conversation_id' };
+    await restorePendingResults();
     if (inFlight.has(conversationId)) return inFlight.get(conversationId);
 
     const work = (async () => {
@@ -169,8 +254,6 @@
         const command = next.data.command;
         if (command === null || command === undefined) return { ok: true, collected: false };
         if (!record(command) || typeof command.id !== 'string' || !record(command.action)) {
-          // The app has already crossed the collection boundary if it returned a command-shaped
-          // payload at all. Fail conservative: no action is attempted and no blind retry is safe.
           return { ok: false, collected: true, settled: false, reason: 'malformed_command' };
         }
 
@@ -179,7 +262,7 @@
         // no-effect result rather than executing from stale authority or leaving an ambiguous timeout.
         if (!authorityCurrent(stillOwnsController)) {
           const result = staleControllerResult();
-          pendingResults.set(conversationId, { id: command.id, result });
+          await rememberPendingResult(conversationId, command.id, result);
           return await settlePendingResult(conversationId);
         }
 
@@ -195,10 +278,12 @@
           // an exception after this point is not safe to retry as an input action.
           result = failureResult(error);
         }
+        result = boundedDurableResult(result, command.action);
 
-        // Save before the first POST. A failed settlement may be retried on a later activity poll,
-        // but this map is never a license to call the executor again.
-        pendingResults.set(conversationId, { id: command.id, result });
+        // Persist before the first result POST. If the MV3 worker is recycled after the page action,
+        // the next worker restores only this result envelope; it never receives authority to execute
+        // the action again.
+        await rememberPendingResult(conversationId, command.id, result);
         return await settlePendingResult(conversationId);
       } catch (error) {
         // The official call() currently never throws, but a transport layer must remain safe if
@@ -218,10 +303,14 @@
     if (!record(deps) || typeof deps.call !== 'function' || typeof deps.cleanConversationId !== 'function') {
       throw new TypeError('BROWSER_CONTROL_TRANSPORT_INVALID_BINDING');
     }
-    if (binding && (binding.call !== deps.call || binding.cleanConversationId !== deps.cleanConversationId)) {
+    if (binding && (binding.call !== deps.call || binding.cleanConversationId !== deps.cleanConversationId || binding.sessionStorage !== deps.sessionStorage)) {
       throw new Error('BROWSER_CONTROL_TRANSPORT_ALREADY_BOUND');
     }
-    binding = Object.freeze({ call: deps.call, cleanConversationId: deps.cleanConversationId });
+    binding = Object.freeze({
+      call: deps.call,
+      cleanConversationId: deps.cleanConversationId,
+      sessionStorage: deps.sessionStorage ?? null
+    });
     return Object.freeze({ protocol: PROTOCOL, poll });
   }
 
@@ -244,6 +333,7 @@
       protocol: PROTOCOL,
       bound: binding !== null,
       executor: executor !== null,
+      durableOutbox: storageAvailable(),
       inFlight: inFlight.size,
       pendingResults: pendingResults.size
     };
