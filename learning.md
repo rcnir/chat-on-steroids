@@ -175,3 +175,22 @@ The exact packaging/check step remains authoritative: if an old transform no lon
 closed, preserve every new upstream guard/state transition, and add a release-specific transform only
 for the newly verified shape. Run the real distributed-artifact release matrix afterward so a new
 release cannot gain support by weakening compatibility checks for older ones.
+
+## Browser action transport needs an explicit ambiguity boundary
+
+For browser automation, distinguish an action that was never delivered from one that was collected
+but whose result was lost. Before collection, a timeout proves the page action did not run and can be
+retried. After collection, the effect may already exist; a timeout must be retry-unsafe and the caller
+must observe current page state before choosing another mutation.
+
+Do not let an extension collect browser commands before an executor is actually registered. A
+transport-only build should leave commands queued rather than turn missing capability into ambiguous
+side effects.
+
+## Verify the exact repository mutation action immediately before a write
+
+Repository connectors often expose similarly named branch, ref, PR and file mutations. Do not carry
+the intended operation only in conversational context. Re-check the exact action name and target
+immediately before each write, especially when transitioning from branch preparation to PR creation.
+If an unintended ref is created, neutralize it before continuing and record the event rather than
+silently treating it as harmless cleanup.
