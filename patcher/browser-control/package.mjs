@@ -14,7 +14,6 @@ import {
   composeTaskBoxMain,
   sha256
 } from './main-adapter.mjs';
-import { composeBrowserSurfaceContract } from './surface-adapter.mjs';
 import {
   composeBackground as composeBrowserBackground,
   composeManifest as composeBrowserManifest
@@ -140,16 +139,15 @@ export async function prepareCombinedAddon({ appPath = DEFAULT_APP, outputRoot, 
     throw new Error('BROWSER_CONTROL_ORIGINAL_EXTENSION_MISMATCH');
   }
 
-  // Compose the model-facing tool + app-side browser bridge into the exact TASK BOX main, then
-  // align Browser publication/status with the existing CoS Desktop `control` capability.
+  // One composer owns the complete main: Browser bridge, model tool, publication/live permission
+  // guards and current-status alignment. The packager never handles an unguarded intermediate main.
   const taskBoxMain = asar.extractFile(archive, MAIN).toString();
   if (sha256(taskBoxMain) !== descriptor.candidate.mainSha256) {
     throw new Error('BROWSER_CONTROL_TASK_BOX_MAIN_CHANGED');
   }
   const browserMain = composeTaskBoxMain(taskBoxMain, originalMain, version);
-  const surfacedMain = composeBrowserSurfaceContract(browserMain.source);
   const mainFile = path.join(root, 'browser-control-composed-main.js');
-  writeFileSync(mainFile, surfacedMain.source);
+  writeFileSync(mainFile, browserMain.source);
   const repacked = await rebuildAsarWithMain(archive, mainFile);
 
   // Layer browser transport/driver into the already-composed TASK BOX companion. Re-prove the
@@ -195,7 +193,7 @@ export async function prepareCombinedAddon({ appPath = DEFAULT_APP, outputRoot, 
     protocol: browserFeature.protocol,
     adapterRevision: browserFeature.adapterRevision,
     upstream: release,
-    mainInsertedBytes: browserMain.insertedBytes + surfacedMain.insertedBytes,
+    mainInsertedBytes: browserMain.insertedBytes,
     runtimeFingerprint: fingerprintTree(browserAddon),
     currentChromeProfileOnly: true,
     alternateProfileCreated: false,
