@@ -129,7 +129,7 @@ describe('Browser Control + TASK BOX companion composition', () => {
     expect(wrapper).not.toContain("import './background.js';");
   });
 
-  it('preserves TASK BOX setup while switching only the service-worker wrapper and browser permissions', () => {
+  it('preserves TASK BOX setup/permissions while switching only the worker wrapper and adding Browser authority', () => {
     const official = {
       version: '2.1.11',
       manifest_version: 3,
@@ -138,16 +138,19 @@ describe('Browser Control + TASK BOX companion composition', () => {
     };
     const taskBox = {
       ...official,
+      permissions: [...official.permissions, 'downloads'],
+      optional_permissions: ['bookmarks'],
       options_page: 'task-box-setup.html',
       background: { service_worker: 'task-box-worker.js', type: 'module' }
     };
     const combined = composeCombinedManifest(taskBox, official, '2.1.11');
     expect(combined.options_page).toBe('task-box-setup.html');
     expect(combined.background).toEqual({ service_worker: 'browser-control-worker.js', type: 'module' });
-    expect(combined.permissions).toEqual(expect.arrayContaining(['storage', 'scripting', 'alarms', 'debugger']));
-    expect(combined.optional_permissions).toEqual(expect.arrayContaining(['tabs', 'tabGroups']));
+    expect(combined.permissions).toEqual(expect.arrayContaining(['storage', 'scripting', 'alarms', 'downloads', 'debugger']));
+    expect(combined.optional_permissions).toEqual(expect.arrayContaining(['bookmarks', 'tabs', 'tabGroups']));
     expect(JSON.stringify(combined)).not.toContain('<all_urls>');
     expect(taskBox.background.service_worker).toBe('task-box-worker.js');
+    expect(taskBox.permissions).toContain('downloads');
   });
 
   it('refuses a manifest that is not an exact TASK BOX candidate shape', () => {
