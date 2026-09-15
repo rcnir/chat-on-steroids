@@ -19,6 +19,8 @@ A reviewable Task 3 head must prove:
   schema publication may leave the cached tool name present for endpoint stability, but the handler
   must return `TOOL_DISABLED` rather than execute;
 - the app's current Desktop status/tool list shows Browser only while live `control` is enabled;
+- one production main composer owns bridge + model tool + publish-time gate + call-time guard + status
+  alignment, so the packager cannot accidentally publish an unguarded intermediate main;
 - the tool obtains the exact caller conversation from `currentCall()` and sends only bounded actions
   to `runBrowserCommand`;
 - the tool stops at the first failure and returns delivery/effect/retry-safety evidence rather than
@@ -40,9 +42,24 @@ A reviewable Task 3 head must prove:
   runtime/original evidence remains intact;
 - ASAR integrity, signature and candidate fingerprints are recomputed after Browser composition;
 - the shared stopped-app TASK BOX installer remains the only live app replacement boundary;
+- `browser:apply` validates the Browser receipt/profile/fallback/capability/upstream contract before
+  delegating to the shared installer;
 - feature fingerprint includes Browser package logic and the shared packaging/signing boundary, so
   an old prepared candidate cannot survive a packaging-code change;
 - unknown upstream releases remain unsupported even when read-only seam evidence looks compatible.
+
+## Source review result before live preparation
+
+The current Task 3 source review found no remaining Browser-specific blocker. Official 2.1.11 and
+2.1.12 macOS-arm64 compiled mains were checked against the current model/surface seam set. In both
+artifacts the publish guard, call-time `reg.guarded` wrapper and status seam each matched exactly once;
+the surface transform added 171 bytes, parsed under Node and reversed byte-exact to the model-wired
+input. This is source/update-resilience evidence, not full repository CI or product acceptance.
+
+The fork still produces no GitHub Actions workflow run for the Task 3 PR, and this execution
+environment cannot clone GitHub to run `npm verify`. Therefore CI/full verify is deliberately **not**
+claimed. The exact combined candidate must still be prepared and tested on the actual Mac before
+Task 3 can be called live-complete.
 
 ## Human / live gate
 
@@ -84,7 +101,7 @@ published artifact identity, compiled main hash, companion fingerprint, bridge p
 seam checks, regression tests, candidate preparation and live acceptance. Do not widen an old seam to
 make a new version pass.
 
-During this work, official 2.1.12 macOS-arm64 artifacts showed that the Browser bridge/background and
-model-registration seams remained compatible with 2.1.11. This demonstrates low expected update
-cost, but 2.1.12 is not a Browser Control supported release until the existing TASK BOX release
-matrix and full combined candidate flow are explicitly advanced to it.
+During this work, official 2.1.12 macOS-arm64 artifacts showed that the Browser bridge/background,
+model-registration and Desktop surface seams remained compatible with 2.1.11. This demonstrates low
+expected update cost, but 2.1.12 is not a Browser Control supported release until the existing TASK
+BOX release matrix and full combined candidate flow are explicitly advanced to it.
