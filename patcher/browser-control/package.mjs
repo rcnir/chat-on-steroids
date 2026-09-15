@@ -46,8 +46,17 @@ export function composeCombinedManifest(taskBoxManifest, officialManifest, versi
     throw new Error('BROWSER_CONTROL_TASK_BOX_MANIFEST_REQUIRED');
   }
   const out = structuredClone(taskBoxManifest);
-  out.permissions = browser.permissions;
-  out.optional_permissions = browser.optional_permissions;
+  // Browser Control is a later layer. Preserve every permission already present on the verified
+  // TASK BOX candidate and union only Browser's extra authority; never rebuild the permission set
+  // from the older official manifest and accidentally erase a future TASK BOX requirement.
+  out.permissions = [...new Set([
+    ...(Array.isArray(taskBoxManifest.permissions) ? taskBoxManifest.permissions : []),
+    ...(Array.isArray(browser.permissions) ? browser.permissions : [])
+  ])];
+  out.optional_permissions = [...new Set([
+    ...(Array.isArray(taskBoxManifest.optional_permissions) ? taskBoxManifest.optional_permissions : []),
+    ...(Array.isArray(browser.optional_permissions) ? browser.optional_permissions : [])
+  ])];
   out.background = { service_worker: 'browser-control-worker.js', type: 'module' };
   return out;
 }
