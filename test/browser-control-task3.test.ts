@@ -21,6 +21,13 @@ function registerDesktopTools(reg) {
   if (process.platform === "win32") registerWindowsDesktopTools(reg);
   else registerMacOSDesktopTools(reg);
 }
+function startMcpServer() {
+  forgetExposedSurface();
+  const stableContext = (surface) => {
+    return surface;
+  };
+  return stableContext;
+}
 function buildServer(ctx, surface) {
   const registrar = createRegistrar(null, ctx, surface);
   if (surface === "core") registerCoreTools(registrar);
@@ -83,6 +90,7 @@ describe('Browser Control Task 3 model-facing wiring', () => {
     expect(surfaced).toContain('let __rcnirBrowserControlPublished = false;');
     expect(surfaced).toContain('if (reg?.exposedCaps?.control) __rcnirBrowserControlPublished = true;');
     expect(surfaced).toContain('if (!__rcnirBrowserControlPublished) return;');
+    expect(surfaced).toContain('__rcnirBrowserControlPublished = false;\n  forgetExposedSurface();');
     expect(surfaced).toContain('reg.guarded("control", "browser"');
     expect(surfaced).toContain('...caps.control ? ["browser"] : []');
     expect(() => composeBrowserSurfaceContract(surfaced)).toThrow(/ALREADY_PATCHED/);
@@ -113,6 +121,7 @@ describe('Browser Control Task 3 model-facing wiring', () => {
       expect(combined.source).toContain('let __rcnirBrowserControlPublished = false;');
       expect(combined.source).toContain('if (reg?.exposedCaps?.control) __rcnirBrowserControlPublished = true;');
       expect(combined.source).toContain('if (!__rcnirBrowserControlPublished) return;');
+      expect(combined.source).toContain('__rcnirBrowserControlPublished = false;\n  forgetExposedSurface();');
       expect(combined.source).toContain('reg.guarded("control", "browser"');
       expect(combined.source).toContain('...caps.control ? ["browser"] : []');
       expect(combined.surfaceInsertedBytes).toBeGreaterThan(0);

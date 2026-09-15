@@ -66,18 +66,19 @@ Chat On Steroids 2.1.11 deliberately clears its generic per-surface exposure sna
 explicit capability change. Browser therefore disappeared from a stale Desktop schema before its
 `reg.guarded('control', 'browser', ...)` handler could return `TOOL_DISABLED`. No Browser action was
 executed while control was off, so this was fail-closed, but it did not satisfy the Task 3 cached-call
-contract. Browser Control 0.3.1 / adapter revision 5 fixes this narrowly with a Browser-only
-process-lifetime publication latch: Browser must first be published while `control` is exposed, then
-that publication fact survives 2.1.11's generic exposure reset while live execution authority still
-comes only from `reg.guarded`. Other Desktop/Core exposure behavior is unchanged. The 0.3.0 live
-candidate must not be re-applied to hide this result; 0.3.1 requires a new candidate and live guard
-acceptance.
+contract. Browser Control 0.3.1 / adapter revision 5 proved that a Browser-only publication latch
+restores the cached-call `TOOL_DISABLED` path, but independent review found the first latch was scoped
+to the whole Electron process rather than one MCP endpoint. Because the app may reconnect and call
+`startMcpServer()` again without restarting Electron, a fresh endpoint started with `control` off could
+inherit Browser publication from an older endpoint. That is fail-closed at execution but violates the
+initial-publication contract. Browser Control 0.3.2 / adapter revision 6 resets the latch exactly at
+new endpoint startup while preserving it across settings-time generic exposure resets; live execution
+authority still comes only from `reg.guarded`. Other Desktop/Core exposure behavior is unchanged.
+Neither the 0.3.0 nor the interim 0.3.1 candidate is accepted as Task 3 complete.
 
 `docs/browser-control-update-runbook.md` is the current Browser Control supplement to
-`Update-Reference.md`. The canonical `Update-Reference.md` itself still needs a short link/entry to
-that supplement during Task 3 closeout. That edit is intentionally deferred to a normal Git working
-copy rather than replacing the large canonical file wholesale through a connector that exposes only
-full-file writes.
+`Update-Reference.md`, and this Task 3 closeout candidate links that supplement from the canonical
+reference.
 
 ## Human / live gate
 

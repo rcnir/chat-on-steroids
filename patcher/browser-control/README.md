@@ -78,8 +78,8 @@ existing Desktop MCP surface. The compiled-main composition owns one complete mo
 3. the direct Desktop registrar calls it;
 4. the nested/code-mode Desktop registrar calls it;
 5. initial publication requires the existing Desktop `exposedCaps.control` capability;
-6. after first publication, a Browser-only process-lifetime latch preserves that published fact across
-   Chat On Steroids 2.1.11's explicit-settings exposure reset without granting any live authority;
+6. after first publication, a Browser-only endpoint-lifetime latch preserves that published fact across
+   Chat On Steroids 2.1.11's explicit-settings exposure reset without granting any live authority; a fresh MCP endpoint resets the latch before first publication;
 7. every later call is rechecked through `reg.guarded('control', 'browser', ...)` so a cached schema
    cannot keep executing after the Human switches the permission off;
 8. the app's current Desktop status/tool list reports Browser only while live `caps.control` is on.

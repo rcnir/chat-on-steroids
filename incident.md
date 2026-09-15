@@ -144,15 +144,16 @@ contract could matter.
 
 - The failed acceptance was treated as an observation/reconciliation problem; the 0.3.0 candidate was
   not re-applied.
-- Browser Control was advanced to feature 0.3.1 / adapter revision 5.
-- The forward fix keeps only one Browser-specific process-lifetime publication latch: Browser remains
-  unpublished if control was never enabled, but once published it may be re-registered after the
-  host clears its generic exposure snapshot.
+- Browser Control was first advanced to feature 0.3.1 / adapter revision 5. Live validation proved
+  the cached Browser call then reached `TOOL_DISABLED`, but independent review found that latch was
+  process-scoped and could outlive an in-process MCP endpoint reconnect.
+- Browser Control was therefore advanced again to feature 0.3.2 / adapter revision 6 before Task 3
+  closeout. The Browser-specific latch is reset at each new MCP endpoint start, remains unpublished
+  if that endpoint never exposed control, and survives only settings-time generic exposure resets
+  inside that endpoint.
 - The latch grants no execution authority. Every Browser call still passes the live
   `reg.guarded('control', 'browser', ...)` check, while status continues to follow current
   `caps.control`.
-- Browser Control regression tests pass 41/41, and the new combined candidate was prepared,
-  fingerprinted, signed, and installed through one Quit / one Apply / one Start forward cutover.
 
 ### Prevention
 

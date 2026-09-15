@@ -269,6 +269,8 @@ feature-specific publication fact needed to keep that already-published tool reg
 fact is discovery continuity, never execution authority: every call must still re-read the live
 permission. Do not disable the host's broader reset semantics merely to make one addon monotonic.
 
+Any retained publication fact must use the same lifetime as the host schema promise. If reconnect can create a fresh MCP endpoint inside the same process, a module-global/process-global latch is too broad: reset it at endpoint creation, not merely at process start.
+
 ## Do not mix native Desktop input into a non-stealing Browser acceptance observation window
 
 A Browser Agent can be perfectly independent of the OS pointer while a nearby acceptance step still
