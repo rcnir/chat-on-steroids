@@ -61,6 +61,12 @@ environment cannot clone GitHub to run `npm verify`. Therefore CI/full verify is
 claimed. The exact combined candidate must still be prepared and tested on the actual Mac before
 Task 3 can be called live-complete.
 
+`docs/browser-control-update-runbook.md` is the current Browser Control supplement to
+`Update-Reference.md`. The canonical `Update-Reference.md` itself still needs a short link/entry to
+that supplement during Task 3 closeout. That edit is intentionally deferred to a normal Git working
+copy rather than replacing the large canonical file wholesale through a connector that exposes only
+full-file writes.
+
 ## Human / live gate
 
 The following are **not source-review facts** and must be observed on the actual Mac after a reviewed
