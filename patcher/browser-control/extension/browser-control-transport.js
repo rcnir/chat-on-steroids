@@ -239,7 +239,7 @@
     }
   }
 
-  async function poll(rawConversationId, stillOwnsController) {
+  async function poll(rawConversationId, stillOwnsController, controllerTabId) {
     if (!binding) return { ok: false, collected: false, reason: 'transport_unbound' };
     const conversationId = binding.cleanConversationId(rawConversationId);
     if (!conversationId) return { ok: false, collected: false, reason: 'bad_conversation_id' };
@@ -279,7 +279,8 @@
           result = normalizeResult(await executor(structuredClone(command.action), {
             id: command.id,
             conversationId,
-            collectedAt: command.collectedAt
+            collectedAt: command.collectedAt,
+            ...(Number.isInteger(controllerTabId) ? { controllerTabId } : {})
           }));
         } catch (error) {
           result = failureResult(error);

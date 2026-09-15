@@ -12,19 +12,19 @@ async function transportHarness() {
     path.join(process.cwd(), 'patcher/browser-control/extension/browser-control-transport.js'),
     'utf8'
   );
-  const box: any = { console, structuredClone, Promise, Map, Set, Error, TypeError, JSON, String };
+  const box: any = { console, structuredClone, Promise, Map, Set, Error, TypeError, JSON, String, Number };
   vm.createContext(box);
   vm.runInContext(source, box);
   return box.CLFBrowserControlTransport;
 }
 
 describe('browser-control controller authority', () => {
-  it('threads the exact owned-document proof through the fire-and-forget activity hook', () => {
+  it('threads exact document and controller-tab proof through the activity hook', () => {
     const source = `const BRIDGE_PROTOCOL = 13;\nfunction cleanConversationId(v) { return v; }\nfunction call() {}\nfunction ownsDocument() { return true; }\nconst HANDLERS = {\n  async activity(message, _sender, source) {\n    await load();\n    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };\n    await noteTabConversation(source, message.conversationId);\n    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };\n    const query =\n      \`?conversationId=\${encodeURIComponent(message.conversationId)}\` +\n      \`&since=\${Number(message.since) || 0}\` +\n      \`&goalClient=\${encodeURIComponent(String(source.tab))}\`;\n    const result = await call(\`/activity\${query}\`);\n    return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };\n  }\n};\n`;
     const composed = composeBackground(source, { appVersion: '2.1.11' });
     expect(composed).toContain('const __rcnirBrowserControlStillOwns = () => ownsDocument(source);');
     expect(composed).toContain(
-      'void __rcnirBrowserControlTransport.poll(message.conversationId, __rcnirBrowserControlStillOwns);'
+      'void __rcnirBrowserControlTransport.poll(message.conversationId, __rcnirBrowserControlStillOwns, source.tab);'
     );
   });
 
@@ -34,7 +34,7 @@ describe('browser-control controller authority', () => {
     const bound = transport.bindBackground({ cleanConversationId: (value: unknown) => value, call });
     transport.registerExecutor(async () => ({ ok: true, effect: 'confirmed' }));
 
-    await expect(bound.poll(CONVERSATION, () => false)).resolves.toMatchObject({
+    await expect(bound.poll(CONVERSATION, () => false, 41)).resolves.toMatchObject({
       ok: false,
       collected: false,
       reason: 'stale_controller'
@@ -64,7 +64,7 @@ describe('browser-control controller authority', () => {
     const executor = vi.fn(async () => ({ ok: true, effect: 'confirmed' }));
     transport.registerExecutor(executor);
 
-    await expect(bound.poll(CONVERSATION, () => current)).resolves.toMatchObject({
+    await expect(bound.poll(CONVERSATION, () => current, 42)).resolves.toMatchObject({
       ok: true,
       collected: true,
       settled: true,
@@ -79,7 +79,7 @@ describe('browser-control controller authority', () => {
     });
   });
 
-  it('may settle an already-executed result after controller ownership moves', async () => {
+  it('passes the exact controller tab to the executor and may settle after ownership moves', async () => {
     const transport = await transportHarness();
     let resultAttempts = 0;
     let offered = true;
@@ -98,17 +98,21 @@ describe('browser-control controller authority', () => {
     const executor = vi.fn(async () => ({ ok: true, effect: 'confirmed', data: { hit: true } }));
     transport.registerExecutor(executor);
 
-    await expect(bound.poll(CONVERSATION, () => true)).resolves.toMatchObject({
+    await expect(bound.poll(CONVERSATION, () => true, 77)).resolves.toMatchObject({
       collected: true,
       settled: false
     });
-    await expect(bound.poll(CONVERSATION, () => false)).resolves.toMatchObject({
+    await expect(bound.poll(CONVERSATION, () => false, 77)).resolves.toMatchObject({
       ok: true,
       collected: true,
       settled: true,
       commandId: 'bc-result'
     });
     expect(executor).toHaveBeenCalledTimes(1);
+    expect(executor).toHaveBeenCalledWith(
+      { type: 'click_ref', ref: 'g1_e2' },
+      expect.objectContaining({ conversationId: CONVERSATION, controllerTabId: 77 })
+    );
     expect(call.mock.calls.map(([requestPath]) => requestPath)).toEqual([
       '/browser/next',
       '/browser/result',

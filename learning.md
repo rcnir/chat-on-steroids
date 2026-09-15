@@ -187,6 +187,27 @@ Do not let an extension collect browser commands before an executor is actually 
 transport-only build should leave commands queued rather than turn missing capability into ambiguous
 side effects.
 
+## Browser refusal boundaries must preempt cleanup commands
+
+Once a browser-controlled main frame reaches a refused surface, cleanup that itself requires a page
+command is no longer safe merely because the cleanup is benign. Pointer-overlay removal through
+`Runtime.evaluate`, screenshot cleanup, or any other renderer call would still exercise authority on
+a surface the driver promised never to control.
+
+Clear driver/session authority first and detach at the debugger boundary without another renderer
+command. Visual cleanup can be abandoned on that document; the refusal boundary is more important
+than cosmetic tidiness.
+
+## A missing visible browser change is not proof of no effect
+
+After trusted browser input is dispatched, top-level readback may remain unchanged even though a
+nested scroller moved, a redirect started, an event handler ran, or another effect occurred outside
+the observation being checked. `effect=none` requires positive evidence that the action produced no
+effect; absence of one chosen signal is insufficient.
+
+When such proof is unavailable, report `effect=unknown` and keep the mutation retry-unsafe. Re-observe
+and re-plan rather than translating an incomplete readback into permission to replay input.
+
 ## Verify the exact repository mutation action immediately before a write
 
 Repository connectors often expose similarly named branch, ref, PR and file mutations. Do not carry
