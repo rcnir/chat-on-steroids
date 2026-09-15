@@ -14,6 +14,9 @@ A reviewable Task 3 head must prove:
   removing Browser Control insertions;
 - Desktop's declared tools, direct registrar and nested/code-mode registrar all expose exactly one
   `browser` tool;
+- Browser publication is gated by the existing Desktop `control` capability and the app's Desktop
+  status/tool list uses that same condition, so Setup cannot claim a Browser schema the server does
+  not actually publish;
 - the tool obtains the exact caller conversation from `currentCall()` and sends only bounded actions
   to `runBrowserCommand`;
 - the tool stops at the first failure and returns delivery/effect/retry-safety evidence rather than
@@ -46,7 +49,8 @@ candidate is prepared:
    one-time enable/approval explicitly. The updater does not click it through Desktop automation.
 3. Reload the current companion exactly once after the candidate is active; do not repeatedly reload
    to make an ambiguous result disappear.
-4. Verify model discovery sees the `browser` tool on the intended Desktop connector.
+4. With Desktop `control` enabled, verify model discovery and Setup/status both see the `browser`
+   tool; with that capability disabled, neither should publish/claim Browser control.
 5. Run `navigate -> observe -> move_ref -> click_ref -> set_value/type -> scroll -> detach` on a
    harmless test page.
 6. During Agent actions, record that the macOS physical pointer does not move, the Human can move it
