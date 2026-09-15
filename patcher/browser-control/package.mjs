@@ -28,6 +28,7 @@ const asar = asarImport?.default ?? asarImport;
 const plist = plistImport?.default ?? plistImport;
 const DEFAULT_APP = '/Applications/Chat On Steroids.app';
 const MAIN = 'out/main/index.js';
+const HEX64 = /^[a-f0-9]{64}$/i;
 const json = file => JSON.parse(readFileSync(file, 'utf8'));
 const writeJson = (file, value) => writeFileSync(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
 
@@ -83,10 +84,23 @@ function updateInfoPlist(candidate, integrity) {
 }
 
 function validateBrowserDescriptor(descriptor) {
+  let release;
+  try { release = releaseFor(descriptor?.version); }
+  catch { throw new Error('BROWSER_CONTROL_PREPARED_FEATURE_MISMATCH'); }
+  const browser = descriptor?.browserControl;
+  const upstream = browser?.upstream;
   if (!descriptor || descriptor.kind !== 'rocaniiru-task-box-package' || descriptor.protocol !== 1 ||
-      descriptor.browserControl?.schema !== 1 || descriptor.browserControl?.featureVersion !== browserFeature.featureVersion ||
-      descriptor.browserControl?.featureFingerprint !== featureFingerprint() || descriptor.browserControl?.protocol !== browserFeature.protocol ||
-      descriptor.browserControl?.controlCapabilityGated !== true || descriptor.browserControl?.statusToolListAligned !== true) {
+      descriptor.requiresBrowserControlActivation !== true ||
+      browser?.schema !== 1 || browser?.featureVersion !== browserFeature.featureVersion ||
+      browser?.featureFingerprint !== featureFingerprint() || browser?.protocol !== browserFeature.protocol ||
+      browser?.adapterRevision !== browserFeature.adapterRevision ||
+      browser?.currentChromeProfileOnly !== true || browser?.alternateProfileCreated !== false ||
+      browser?.nativeDesktopFallback !== false || browser?.foregroundEscalation !== false ||
+      browser?.controlCapabilityGated !== true || browser?.statusToolListAligned !== true ||
+      browser?.debuggerPermissionActivation !== 'human-required-on-first-enable' || browser?.liveAcceptance !== false ||
+      typeof browser?.runtimeFingerprint !== 'string' || !HEX64.test(browser.runtimeFingerprint) ||
+      upstream?.tagCommit !== release.tagCommit || upstream?.bridgeProtocol !== release.bridgeProtocol ||
+      upstream?.mainSha256 !== release.mainSha256 || upstream?.extensionFingerprint !== release.extensionFingerprint) {
     throw new Error('BROWSER_CONTROL_PREPARED_FEATURE_MISMATCH');
   }
   return descriptor;
@@ -107,6 +121,12 @@ export async function prepareCombinedAddon({ appPath = DEFAULT_APP, outputRoot, 
   const root = path.dirname(candidate);
   const browserFeatureRoot = path.join(root, 'browser-control-feature');
   if (existsSync(browserFeatureRoot)) throw new Error('BROWSER_CONTROL_FEATURE_OUTPUT_EXISTS');
+
+  // The TASK BOX packager is the first authority. Before Browser adds a byte, prove that the
+  // candidate we received still exactly matches the descriptor it just produced.
+  if (!descriptor.candidate?.bundleFingerprint || fingerprintTree(candidate) !== descriptor.candidate.bundleFingerprint) {
+    throw new Error('BROWSER_CONTROL_TASK_BOX_CANDIDATE_CHANGED');
+  }
   const built = buildBrowserFeature(browserFeatureRoot, version, { workerTarget: 'task-box-worker.js' });
 
   const resources = path.join(candidate, 'Contents/Resources');
@@ -123,14 +143,21 @@ export async function prepareCombinedAddon({ appPath = DEFAULT_APP, outputRoot, 
   // Compose the model-facing tool + app-side browser bridge into the exact TASK BOX main, then
   // align Browser publication/status with the existing CoS Desktop `control` capability.
   const taskBoxMain = asar.extractFile(archive, MAIN).toString();
+  if (sha256(taskBoxMain) !== descriptor.candidate.mainSha256) {
+    throw new Error('BROWSER_CONTROL_TASK_BOX_MAIN_CHANGED');
+  }
   const browserMain = composeTaskBoxMain(taskBoxMain, originalMain, version);
   const surfacedMain = composeBrowserSurfaceContract(browserMain.source);
   const mainFile = path.join(root, 'browser-control-composed-main.js');
   writeFileSync(mainFile, surfacedMain.source);
   const repacked = await rebuildAsarWithMain(archive, mainFile);
 
-  // Layer browser transport/driver into the already-composed TASK BOX companion.
+  // Layer browser transport/driver into the already-composed TASK BOX companion. Re-prove the
+  // current TASK BOX companion before the first write, independently of the full-bundle proof.
   const extension = path.join(resources, 'extension');
+  if (fingerprintTree(extension) !== descriptor.candidate.extensionSha256) {
+    throw new Error('BROWSER_CONTROL_TASK_BOX_EXTENSION_CHANGED');
+  }
   const backgroundFile = path.join(extension, 'background.js');
   const popupHtmlFile = path.join(extension, 'popup.html');
   const popupJsFile = path.join(extension, 'popup.js');
