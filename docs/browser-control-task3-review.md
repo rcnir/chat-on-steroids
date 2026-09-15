@@ -113,6 +113,47 @@ Any failure after a mutation is collected is an observation/reconciliation probl
 permission to repeat the mutation or reinstall the same candidate. Fix forward with a new feature
 revision if code changes are required.
 
+## Live acceptance result — 2026-09-16
+
+Browser Control 0.3.2 / adapter revision 6 is the accepted Task 3 runtime candidate on the actual
+macOS host. The installed bundle fingerprint is
+`96210671feaab98249cbeda36c89e5aa24a990c9270eb87b4939bfaa11240028`; its designated requirement
+still uses the established local signing identity. The companion Browser payload is byte-identical
+to the previously activated Browser candidate, so no second Chrome-extension reload was performed.
+
+Observed live behavior on the current Human Chrome profile:
+
+- Browser navigation created and reused a dedicated inactive Agent tab; existing Human tabs were not
+  navigated.
+- `observe`, Agent-Pointer movement, trusted click, form `set_value`/typing and scroll all produced
+  the expected page effects. One scroll response was ambiguous after dispatch; state was observed
+  instead of replaying the mutation, and the page proved the scroll had already occurred.
+- A stale semantic ref failed closed. ChatGPT/controller and non-http(s) targets failed closed before
+  page control. `detach` returned Browser ownership to the detached state.
+- During a Browser-only concurrency sample, the Human moved the physical macOS pointer while the
+  Agent Pointer acted in the background. The Human reported no pointer stealing, and Chrome did not
+  become the foreground application. Earlier pointer/focus movement was traced specifically to a
+  separate native Desktop `computer` setup action and was excluded from the Browser-only sample.
+- TASK BOX/Clear durable state remained byte-identical at SHA-256
+  `7e44a84a4ff7f45620e4ab8608d4b500ab24e318a213426b18daa43552a53476`, with no busy operation and
+  the existing 20 completed receipts unchanged.
+- The interim 0.3.1 candidate live-proved the cached-schema permission path: after Browser had been
+  published, turning `control` off caused the Browser handler to reject calls with `TOOL_DISABLED`
+  and perform no Browser action. The 0.3.2 compiled Browser registrar/handler block is byte-identical
+  to 0.3.1 (SHA-256 `50e529a27751a16cf46e6fe92160e5590c383b58525c918bd23c7af123aed988`);
+  0.3.2 changes only the endpoint-start publication lifetime by inserting one latch reset at the
+  `startMcpServer()` boundary. The final 0.3.2 host was also started with `control` off and published
+  the fresh OFF Desktop schema before `control` was later enabled for Browser status/action checks.
+  After the Human turned control off again, the ChatGPT client removed direct Desktop invocation
+  before another clean one-shot handler call could be collected; this client-side refusal is not
+  misreported as a second direct `TOOL_DISABLED` observation.
+
+Source validation for the accepted candidate includes all 41 Browser Control regressions and the full
+repository Vitest run: 135 test files passed, 3 suites skipped; 3,044 tests passed and 106 skipped.
+Independent exact-head review found no remaining Browser runtime/package blocker after the endpoint-
+lifetime reset was added. The candidate descriptor deliberately retains `liveAcceptance:false`; live
+acceptance is an external observation record and does not rewrite a prepared immutable package.
+
 ## Upstream update rule
 
 Read-only evidence intake may compare a new release immediately. Support still requires exact
