@@ -217,6 +217,25 @@
     return { attached: false, released: { tabId: old.tabId, dedicated: old.dedicated === true } };
   }
 
+  /**
+   * Refusal detach must not touch the page again. Once a main frame is on ChatGPT or another
+   * refused surface, even removing the visual pointer through Runtime.evaluate would be a page
+   * command on a surface browser control promises never to drive.
+   */
+  async function detachRefused() {
+    const old = session;
+    if (!old) return { attached: false, released: null };
+    // Clear authority synchronously before awaiting Chrome so sibling event listeners and delayed
+    // pointer restores cannot issue another command through this session.
+    session = null;
+    refs.clear();
+    observationGeneration = 0;
+    pointer = { x: 0, y: 0, pressed: false, visible: false };
+    try { await chrome.debugger.detach({ tabId: old.tabId }); } catch { /* already detached */ }
+    await ungroupTab(old.tabId);
+    return { attached: false, released: { tabId: old.tabId, dedicated: old.dedicated === true } };
+  }
+
   async function status() {
     const granted = await permissionsGranted();
     if (!session) {
@@ -225,7 +244,7 @@
     const tab = await tabInfo();
     const address = tab?.pendingUrl || tab?.url || '';
     if (!tab || refusedUrl(address)) {
-      await detach();
+      await detachRefused();
       return { granted, attached: false, tabId: null, url: null, title: null, groupId: null };
     }
     return {
@@ -480,7 +499,7 @@
     if (session.tabId === controllerTabId) throw fail('BROWSER_TARGET_REFUSED', 'the controller tab cannot be driven');
     const address = await currentPageUrl();
     if (refusedUrl(address)) {
-      await detach();
+      await detachRefused();
       throw fail('BROWSER_TARGET_REFUSED', `the Agent tab reached a refused surface: ${bounded(address, 300)}`);
     }
     return address;
@@ -506,7 +525,11 @@
     }
     refs.clear();
     await pause(80);
-    await assertAllowed(controllerTabId);
+    try {
+      await assertAllowed(controllerTabId);
+    } catch (error) {
+      throw fail(error.code || 'BROWSER_NAVIGATE_FAILED', bounded(error.message), 'unknown', false);
+    }
     if (session && session.documentEpoch === before) session.documentEpoch += 1;
     await restorePointer();
     const tab = await tabInfo();
@@ -598,7 +621,11 @@
     await send('Page.navigateToHistoryEntry', { entryId: entry.id }, NAVIGATION_TIMEOUT_MS);
     refs.clear();
     await pause(40);
-    await assertAllowed(controllerTabId);
+    try {
+      await assertAllowed(controllerTabId);
+    } catch (error) {
+      throw fail(error.code || 'BROWSER_NAVIGATE_FAILED', bounded(error.message), 'unknown', false);
+    }
     return { url: entry.url };
   }
 
@@ -628,7 +655,11 @@
           await assertAllowed(controllerTabId);
           const point = await resolveRef(String(action.ref || ''));
           await clickAt(point.x, point.y, action.button || 'left');
-          await assertAllowed(controllerTabId);
+          try {
+            await assertAllowed(controllerTabId);
+          } catch (error) {
+            throw fail(error.code || 'BROWSER_INPUT_FAILED', bounded(error.message), 'unknown', false);
+          }
           return { ok: true, effect: 'unknown', data: { x: Math.round(point.x), y: Math.round(point.y) } };
         }
         case 'set_value': {
@@ -651,7 +682,12 @@
           await pause(80);
           const after = (await send('Runtime.evaluate', { expression: '({x:scrollX,y:scrollY})', returnByValue: true }))?.result?.value || {};
           const changed = before.x !== after.x || before.y !== after.y;
-          return { ok: true, effect: changed ? 'confirmed' : 'none', retrySafe: !changed, data: { scrollX: after.x || 0, scrollY: after.y || 0 } };
+          return {
+            ok: true,
+            effect: changed ? 'confirmed' : 'unknown',
+            retrySafe: false,
+            data: { scrollX: after.x || 0, scrollY: after.y || 0 }
+          };
         }
         case 'drag': {
           await assertAllowed(controllerTabId);
@@ -687,7 +723,11 @@
           await send('Page.reload', {}, NAVIGATION_TIMEOUT_MS);
           refs.clear();
           await pause(40);
-          await assertAllowed(controllerTabId);
+          try {
+            await assertAllowed(controllerTabId);
+          } catch (error) {
+            throw fail(error.code || 'BROWSER_NAVIGATE_FAILED', bounded(error.message), 'unknown', false);
+          }
           return { ok: true, effect: 'confirmed', data: {} };
         default:
           throw fail('BROWSER_BAD_ACTION', `unsupported browser action ${bounded(action.type, 80)}`);
@@ -728,6 +768,10 @@
       session.documentEpoch += 1;
       refs.clear();
       observationGeneration = 0;
+      if (refusedUrl(params?.frame?.url)) {
+        void detachRefused();
+        return;
+      }
       setTimeout(() => void restorePointer(), 40);
     }
   });
