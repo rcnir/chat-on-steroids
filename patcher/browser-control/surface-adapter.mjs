@@ -37,14 +37,34 @@ function requireUnique(source, needle, label) {
   if (count(source, needle) !== 1) throw new Error(`BROWSER_CONTROL_SURFACE_ADAPTER_SEAM_MISMATCH: ${label}`);
 }
 
+/** Remove only the Browser surface capability/status insertions from an already-composed main. */
+export function restoreBrowserSurfaceContract(source) {
+  if (typeof source !== 'string') throw new Error('BROWSER_CONTROL_SURFACE_ADAPTER_INVALID_SOURCE');
+  requireUnique(source, TOOL_GUARD_WITH_CONTROL, 'guarded browser tool registrar');
+  requireUnique(source, HANDLER_START_WITH_CONTROL, 'guarded browser handler start');
+  requireUnique(source, HANDLER_END_WITH_CONTROL, 'guarded browser handler end');
+  requireUnique(source, MACOS_STATUS_WITH_BROWSER, 'browser status tools');
+
+  const restored = source
+    .replace(HANDLER_END_WITH_CONTROL, HANDLER_END_SEAM)
+    .replace(HANDLER_START_WITH_CONTROL, HANDLER_START_SEAM)
+    .replace(TOOL_GUARD_WITH_CONTROL, TOOL_GUARD_SEAM)
+    .replace(MACOS_STATUS_WITH_BROWSER, MACOS_STATUS_SEAM);
+  new vm.Script(restored, { filename: 'browser-control-surface-restored-main.js' });
+  return {
+    source: restored,
+    removedBytes: Buffer.byteLength(source) - Buffer.byteLength(restored)
+  };
+}
+
 /**
  * Final model-surface alignment for supported macOS Browser candidates.
  *
  * Browser authority is separate from native input, but publishing it through the Desktop connector
  * must still respect the existing CoS `control` capability. Exposure is monotonic for one endpoint,
  * so the handler also uses the kernel's live `reg.guarded` check after publication. The same
- * capability drives the app's status/tool list so Setup cannot claim a Browser schema the server
- * does not actually publish.
+ * capability drives the app's status/tool list so Setup cannot claim Browser as live when its
+ * permission is currently off.
  */
 export function composeBrowserSurfaceContract(source) {
   if (typeof source !== 'string' || source.includes('BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD')) {
@@ -61,12 +81,8 @@ export function composeBrowserSurfaceContract(source) {
   patched = patched.replace(MACOS_STATUS_SEAM, MACOS_STATUS_WITH_BROWSER);
   new vm.Script(patched, { filename: 'browser-control-surface-aligned-main.js' });
 
-  const restored = patched
-    .replace(HANDLER_END_WITH_CONTROL, HANDLER_END_SEAM)
-    .replace(HANDLER_START_WITH_CONTROL, HANDLER_START_SEAM)
-    .replace(TOOL_GUARD_WITH_CONTROL, TOOL_GUARD_SEAM)
-    .replace(MACOS_STATUS_WITH_BROWSER, MACOS_STATUS_SEAM);
-  if (restored !== source) throw new Error('BROWSER_CONTROL_SURFACE_ADAPTER_PRESERVATION_FAILED');
+  const restored = restoreBrowserSurfaceContract(patched);
+  if (restored.source !== source) throw new Error('BROWSER_CONTROL_SURFACE_ADAPTER_PRESERVATION_FAILED');
 
   return {
     source: patched,
