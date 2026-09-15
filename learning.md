@@ -231,6 +231,19 @@ boundary. After the later layer changes the candidate, recompute integrity, sign
 candidate fingerprints, and include the packaging/signing logic itself in the feature fingerprint so
 an old prepared candidate cannot survive a packaging-code change unnoticed.
 
+## Monotonic tool exposure is not live permission authority
+
+ChatGPT can cache a connector's tool schema for the lifetime of a conversation or endpoint. Removing
+a tool immediately when a permission is switched off can therefore turn a normal permission change
+into an `UNKNOWN_TOOL`/stale-schema failure. Keep exposure monotonic when the host architecture is
+built around cached schemas, but never treat prior exposure as authority to execute later.
+
+Use two separate checks: an exposure-time condition decides whether the tool enters the endpoint's
+published schema, and a call-time guard re-reads the current permission before every execution. If the
+permission is revoked after publication, the cached tool name may remain visible, but the handler must
+return the normal disabled-tool refusal and perform no side effect. Status/UI reporting should describe
+the current live capability, not imply that a cached schema is still executable.
+
 ## Verify the exact repository mutation action immediately before a write
 
 Repository connectors often expose similarly named branch, ref, PR and file mutations. Do not carry
