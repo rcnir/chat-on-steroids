@@ -70,13 +70,21 @@ must not manufacture a new prompt unless the capability set genuinely changes ag
 ## Task 3 — model-facing tool and combined candidate
 
 Task 3 keeps the driver/transport independent but wires one experimental `browser` tool into the
-existing Desktop MCP surface. The compiled-main adapter changes only four exact facts:
+existing Desktop MCP surface. The compiled-main composition owns one complete model-surface contract:
 
 1. Desktop's declared tool names include `browser`;
 2. one patcher-owned `__rcnirRegisterBrowserTool` implementation is inserted beside the existing
    Desktop registrar;
 3. the direct Desktop registrar calls it;
-4. the nested/code-mode Desktop registrar calls it.
+4. the nested/code-mode Desktop registrar calls it;
+5. initial publication requires the existing Desktop `exposedCaps.control` capability;
+6. every later call is rechecked through `reg.guarded('control', 'browser', ...)` so a cached schema
+   cannot keep executing after the Human switches the permission off;
+7. the app's current Desktop status/tool list reports Browser only while live `caps.control` is on.
+
+This follows the existing CoS monotonic-schema rule: a Browser tool that was once published may remain
+in a cached ChatGPT schema for the endpoint lifetime, but revoking control causes the next call to
+return `TOOL_DISABLED` and perform no Browser action.
 
 The tool obtains the exact ChatGPT conversation from `currentCall()`, passes actions to Task 1's
 `runBrowserCommand`, stops on the first failure, surfaces delivery/effect/retry-safety evidence, and
@@ -95,21 +103,28 @@ candidate rather than rebuilding the application from source or maintaining a br
 `npm run browser:prepare -- ...`:
 
 - first invokes the existing TASK BOX `prepareAddon` path;
+- before Browser writes anything, re-proves the TASK BOX candidate's full bundle fingerprint, main
+  hash and companion fingerprint against the descriptor returned by that same prepare;
 - modifies only that candidate copy;
-- composes Browser bridge + model tool into its TASK BOX-composed main;
+- uses one main composer for Browser bridge + model tool + publication/live capability guards +
+  current-status alignment; the packager never handles an unguarded intermediate main;
 - layers transport/driver/popup files over the already-composed companion;
 - makes `browser-control-worker.js` wrap the existing `task-box-worker.js`;
-- keeps TASK BOX's setup page and durable state contracts;
+- preserves TASK BOX's setup page, durable state contracts, existing required permissions and existing
+  optional permissions, then unions only Browser's additional permission authority;
 - installs Browser runtime under `Resources/rocaniiru-browser-control`;
 - updates ASAR integrity, re-signs and verifies the candidate;
 - recalculates candidate fingerprints in the existing descriptor;
-- records a separate `browserControl` receipt with `liveAcceptance:false`.
+- records a separate `browserControl` receipt with `liveAcceptance:false` and the capability/profile/
+  fallback invariants required by `browser:apply`.
 
 Prepare never replaces the installed app, reloads Chrome, switches Chrome profiles, asks for Browser
 permissions or drives a page.
 
-`npm run browser:apply -- ...` does not invent another installer. It validates the Browser receipt and
-then delegates to the existing stopped-app TASK BOX apply boundary. The installed app must already be
+`npm run browser:apply -- ...` does not invent another installer. It first validates the Browser
+receipt against the current feature/release contract, then delegates to the existing stopped-app
+TASK BOX apply boundary. That shared installer rechecks the complete candidate bundle, ASAR, main,
+extension, Info.plist and code signature before replacement. The installed app must already be
 stopped; replacement/rollback rules remain those of the existing updater path.
 
 ## Live acceptance gate
@@ -119,6 +134,9 @@ live acceptance. The final current-profile trial must prove all of these on the 
 
 - keep the currently used Chrome profile/session; do not create or switch profiles;
 - complete the one-time Chrome `debugger` permission activation explicitly if Chrome requires it;
+- start/reconnect a Desktop endpoint with `control` enabled and verify Browser discovery/status;
+- after publication, switch `control` off once and prove a cached Browser call is rejected as
+  `TOOL_DISABLED`, then re-enable only if needed for the remaining harmless trial;
 - `navigate` creates a dedicated inactive Agent tab without changing the Human's existing tab;
 - `observe -> move_ref -> click_ref -> set_value/type -> scroll -> detach` settles end to end;
 - the macOS system pointer does not move because of Agent actions;
@@ -144,11 +162,12 @@ release-specific adapter change over carrying a fork-wide upstream diff or blind
 
 For high-frequency upstream updates, intake is read-only first: capture release/tag, distributed
 artifact digest, exact compiled main hash, exact extension fingerprint, bridge protocol and the
-Browser bridge/model-tool seams. Evidence that a new release has the same seams is useful but is
-**not support authority**. Only after the normal artifact checks, regression tests and live acceptance
-may that version be added to the Browser Control support matrix.
+Browser bridge/model-tool/surface seams. Evidence that a new release has the same seams is useful but
+is **not support authority**. Only after the normal artifact checks, regression tests, combined
+candidate preparation and live acceptance may that version be added to the Browser Control support
+matrix.
 
-The 2.1.12 official macOS-arm64 artifact was inspected during Task 3. Its Browser bridge/background
-and model-tool registration seams remained compatible with 2.1.11, which is positive update-cost
-evidence, but 2.1.12 remains outside Browser Control's support matrix until the existing TASK BOX
-release matrix and complete candidate acceptance are also advanced to that release.
+The 2.1.12 official macOS-arm64 artifact was inspected during Task 3. Its Browser bridge/background,
+model-tool registration and Desktop surface seams remained compatible with 2.1.11, which is positive
+update-cost evidence, but 2.1.12 remains outside Browser Control's support matrix until the existing
+TASK BOX release matrix and complete candidate acceptance are also advanced to that release.
