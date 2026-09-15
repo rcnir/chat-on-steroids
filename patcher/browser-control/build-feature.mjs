@@ -6,7 +6,8 @@ import { workerWrapper } from './extension-adapter.mjs';
 
 export const root = path.dirname(fileURLToPath(import.meta.url));
 const inputFiles = [
-  'feature.json', 'main-adapter.mjs', 'extension-adapter.mjs', 'popup-adapter.mjs', 'loader.cjs', 'build-feature.mjs',
+  'feature.json', 'main-adapter.mjs', 'extension-adapter.mjs', 'popup-adapter.mjs', 'loader.cjs', 'build-feature.mjs', 'package.mjs',
+  '../task-box/package.mjs', '../../scripts/rocaniiru-task-box-package.mjs', '../../scripts/macos-local-signing.mjs',
   'runtime/browser-control.cjs', 'extension/browser-control-transport.js', 'extension/browser-control-driver.js',
   'extension/browser-control-guard.js'
 ];

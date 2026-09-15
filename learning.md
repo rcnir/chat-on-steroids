@@ -208,6 +208,29 @@ effect; absence of one chosen signal is insufficient.
 When such proof is unavailable, report `effect=unknown` and keep the mutation retry-unsafe. Re-observe
 and re-plan rather than translating an incomplete readback into permission to replay input.
 
+## Model-facing tool wiring is a multi-seam contract
+
+Adding a tool implementation is not enough when the application separates declared surface names,
+direct registration and nested/code-mode registration. A partial change can make a tool callable in
+one path but absent from discovery, or visible to direct calls while nested execution rejects it.
+
+Treat the declared tool list, direct registrar and nested registrar as one versioned seam set. Require
+each expected seam exactly once, patch them together, and prove that removing only the local
+insertions restores the exact upstream bytes. Keep the execution driver behind that schema so future
+model-facing routing changes do not become driver rewrites.
+
+## Layer new addons onto an already verified candidate, not beside a second installer
+
+When one local feature already owns official-artifact verification, candidate copying, rollback,
+ASAR integrity and signing, a second feature should compose onto that prepared candidate rather than
+create a competing installation pipeline. A second installer duplicates the most dangerous boundary
+and makes update failures harder to attribute.
+
+Keep each feature's source/adapter contracts independent, but share one stopped-app replacement
+boundary. After the later layer changes the candidate, recompute integrity, signature and all
+candidate fingerprints, and include the packaging/signing logic itself in the feature fingerprint so
+an old prepared candidate cannot survive a packaging-code change unnoticed.
+
 ## Verify the exact repository mutation action immediately before a write
 
 Repository connectors often expose similarly named branch, ref, PR and file mutations. Do not carry
