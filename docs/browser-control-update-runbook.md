@@ -86,6 +86,10 @@ Human approval/re-enable. Treat that as a one-time Human boundary:
   `tabGroups` permissions;
 - later ordinary updates must not prompt again unless the permission set genuinely changes.
 
+Browser Control 0.4.0 changes driver session topology without adding a Chrome permission. Activating
+the updated companion still uses the normal single extension reload for the new bytes, but it does
+not justify an additional reload, profile change or new permission-approval cycle.
+
 The CoS Desktop `control` capability is a separate authority from Chrome extension permissions.
 Browser may enter the Desktop connector schema only when `exposedCaps.control` allowed publication,
 and every Browser call must still pass the live `reg.guarded('control', 'browser', ...)` check. A
@@ -121,6 +125,37 @@ Use a harmless web test target and verify the following in order:
 11. Attempt controller/ChatGPT and non-http(s) targets and confirm refusal.
 12. `detach` removes debugger ownership, driven-tab grouping and the Agent Pointer.
 13. Re-read TASK BOX/Clear durable state; Browser acceptance must not change it.
+
+### Multi-session acceptance for Browser Control 0.4.x
+
+After the single-session safety checks above still pass, prove the new topology with the same current
+Chrome profile:
+
+1. Keep Prime, worker-1 and worker-2 in three distinct ChatGPT/controller tabs/conversations.
+2. Have each conversation perform its first `navigate`; confirm three different `active:false`
+   dedicated Agent tabs exist and all three remain debugger-attached.
+3. `observe` all three sessions. Generation/index suffixes may match, but complete refs must carry
+   different BrowserSession namespaces and resolve only inside the conversation/session that minted
+   them. Detach/recreate the same conversation once and confirm its old ref remains stale after a new
+   observation.
+4. Overlap harmless actions from all three conversations. Confirm CDP work proceeds concurrently rather
+   than one conversation replacing another's session.
+5. Move Agent Pointer state independently in more than one Agent tab and confirm no pointer state leaks
+   between sessions or into the macOS system pointer.
+6. Detach Prime's Browser session and confirm both worker sessions remain attached and usable.
+7. Exercise a navigation/refusal or debugger-detach condition on one worker and confirm the other
+   session's refs, document epoch, Agent Pointer and debugger attachment remain unchanged.
+8. While the Agent actions overlap, the Human types into another foreground application. Do not invoke
+   native Desktop `computer` during this observation window. Chrome must not become frontmost and Human
+   keyboard focus must not be stolen.
+9. Confirm the 9-session admission limit fails closed without evicting an existing owner. This limit is
+   the current CoS hard worker maximum of eight plus one prime slot; update it deliberately if the CoS
+   concurrency contract changes.
+10. Re-read TASK BOX/Clear durable state after the multi-session trial.
+
+Human popup disable and permission revoke remain global emergency boundaries: they must detach every
+Browser session. An Agent-issued `detach` is conversation-scoped and must never release a sibling
+conversation's session.
 
 If a collected mutation loses its result, observe/reconcile current state. Do not repeat the mutation
 merely because the expected visible change was not observed.

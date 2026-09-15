@@ -6,6 +6,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { composeManifest, workerWrapper } from '../patcher/browser-control/extension-adapter.mjs';
 
 const DRIVER = path.join(process.cwd(), 'patcher/browser-control/extension/browser-control-driver.js');
+const CONVERSATION = '12345678-abcd-4abc-8abc-123456789abc';
+let commandSequence = 0;
+const controller = () => {
+  commandSequence += 1;
+  return {
+    id: `bc-00000000-0000-4000-8000-${commandSequence.toString(16).padStart(12, '0')}`,
+    conversationId: CONVERSATION,
+    controllerTabId: 99
+  };
+};
 
 async function harness() {
   const source = await fs.readFile(DRIVER, 'utf8');
@@ -81,8 +91,9 @@ async function harness() {
   vm.runInContext(source, box);
   await Promise.resolve();
   await new Promise(resolve => setTimeout(resolve, 0));
-  if (!executor) throw new Error('executor not registered');
-  return { source, chrome, calls, driver: box.CLFBrowserControlDriver, run: executor!, onEvent, onDetach };
+  const run = executor as ((action: any, command?: any) => Promise<any>) | null;
+  if (!run) throw new Error('executor not registered');
+  return { source, chrome, calls, driver: box.CLFBrowserControlDriver, run, onEvent, onDetach };
 }
 
 describe('independent browser driver', () => {
@@ -108,26 +119,28 @@ describe('independent browser driver', () => {
 
   it('creates an inactive dedicated Agent tab, observes refs, and drives only CDP', async () => {
     const h = await harness();
-    const nav = await h.run({ type: 'navigate', url: 'https://example.com/' }, { controllerTabId: 99 });
+    const nav = await h.run({ type: 'navigate', url: 'https://example.com/' }, controller());
     expect(nav).toMatchObject({ ok: true, effect: 'confirmed', data: { tabId: 20, created: true } });
     expect(h.chrome.tabs.create).toHaveBeenCalledWith({ url: 'https://example.com/', active: false });
     expect(h.chrome.tabs.query).not.toHaveBeenCalledWith({});
     expect(h.chrome.debugger.attach).toHaveBeenCalledWith({ tabId: 20 }, '1.3');
     expect(h.chrome.tabs.group).toHaveBeenCalledWith({ tabIds: [20] });
 
-    const observed = await h.run({ type: 'observe' }, { controllerTabId: 99 });
+    const observed = await h.run({ type: 'observe' }, controller());
     expect(observed.ok).toBe(true);
     expect(observed.data).toMatchObject({ dedicated: true });
-    expect(observed.data.elements[0]).toMatchObject({ ref: 'g1_e0', role: 'button', name: 'Go', x: 100, y: 80 });
+    expect(observed.data.elements[0]).toMatchObject({ role: 'button', name: 'Go', x: 100, y: 80 });
+    expect(observed.data.elements[0].ref).toMatch(/_g1_e0$/);
     expect(observed.data.screenshot).toMatchObject({ mimeType: 'image/jpeg', width: 800, height: 600 });
 
-    const hover = await h.run({ type: 'move_ref', ref: 'g1_e0' }, { controllerTabId: 99 });
+    const ref = observed.data.elements[0].ref;
+    const hover = await h.run({ type: 'move_ref', ref }, controller());
     expect(hover).toMatchObject({ ok: true, effect: 'confirmed' });
-    const click = await h.run({ type: 'click_ref', ref: 'g1_e0' }, { controllerTabId: 99 });
+    const click = await h.run({ type: 'click_ref', ref }, controller());
     expect(click).toMatchObject({ ok: true, effect: 'unknown' });
     expect(h.calls.filter(row => row.method === 'Input.dispatchMouseEvent').map(row => row.params.type)).toEqual(expect.arrayContaining(['mouseMoved', 'mousePressed', 'mouseReleased']));
 
-    const released = await h.run({ type: 'detach' });
+    const released = await h.run({ type: 'detach' }, controller());
     expect(released).toMatchObject({ ok: true, data: { attached: false, released: { tabId: 20, dedicated: true } } });
     const evaluations = h.calls.filter(row => row.method === 'Runtime.evaluate').map(row => String(row.params?.expression || ''));
     expect(evaluations.some(expression => expression.includes("__cos_agent_pointer__')?.remove"))).toBe(true);
@@ -136,9 +149,9 @@ describe('independent browser driver', () => {
 
   it('hard-detaches a refused main frame without sending another page command', async () => {
     const h = await harness();
-    await h.run({ type: 'navigate', url: 'https://example.com/' }, { controllerTabId: 99 });
-    const observed = await h.run({ type: 'observe' }, { controllerTabId: 99 });
-    await h.run({ type: 'move_ref', ref: observed.data.elements[0].ref }, { controllerTabId: 99 });
+    await h.run({ type: 'navigate', url: 'https://example.com/' }, controller());
+    const observed = await h.run({ type: 'observe' }, controller());
+    await h.run({ type: 'move_ref', ref: observed.data.elements[0].ref }, controller());
     const before = h.calls.length;
     expect(h.onEvent.length).toBeGreaterThan(0);
     h.onEvent[0]!({ tabId: 20 }, 'Page.frameNavigated', { frame: { id: 'root', url: 'https://chatgpt.com/c/refused' } });
@@ -153,11 +166,11 @@ describe('independent browser driver', () => {
 
   it('makes earlier refs stale after a new observation', async () => {
     const h = await harness();
-    await h.run({ type: 'navigate', url: 'https://example.com/' }, { controllerTabId: 99 });
-    const first = await h.run({ type: 'observe' }, { controllerTabId: 99 });
+    await h.run({ type: 'navigate', url: 'https://example.com/' }, controller());
+    const first = await h.run({ type: 'observe' }, controller());
     const ref = first.data.elements[0].ref;
-    await h.run({ type: 'observe' }, { controllerTabId: 99 });
-    const stale = await h.run({ type: 'click_ref', ref }, { controllerTabId: 99 });
+    await h.run({ type: 'observe' }, controller());
+    const stale = await h.run({ type: 'click_ref', ref }, controller());
     expect(stale).toMatchObject({ ok: false, error: 'BROWSER_STALE_REF', effect: 'none', retrySafe: true });
   });
 

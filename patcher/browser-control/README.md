@@ -58,7 +58,7 @@ Chrome does not permit `debugger` to be requested as an optional permission, so 
 the composed companion manifest. `tabs` and `tabGroups` remain optional and are requested only from
 the companion popup's explicit Human gesture. No `<all_urls>` host permission is added.
 
-Revoking Browser control first detaches the driven session, then removes the optional tab permissions.
+Revoking Browser control first detaches all driven sessions, then removes the optional tab permissions.
 With optional permissions absent, the driver unregisters its executor and the Task 1 transport
 collects no new browser command.
 
@@ -96,6 +96,50 @@ call are explicitly marked superseded because their refs are already stale.
 The tool is intentionally an initial public API, not an architectural dependency of the driver. The
 Browser Controller remains independent so a future upstream-compatible routing layer can place the
 same capability behind another model-facing surface without changing CDP/session authority.
+
+## Multi-session phase — conversation-scoped Browser sessions
+
+Browser Control 0.4.0 / adapter revision 7 keeps Task 1's conversation-scoped transport and replaces
+Task 2's single driver session with bounded per-conversation Browser sessions. The transport contract
+does not change: one conversation may still have only one outstanding Browser command, while commands
+from different conversations may execute concurrently.
+
+The driver authority model is:
+
+```text
+conversationId -> BrowserSession
+tabId          -> conversationId   (reverse event-routing index only)
+```
+
+`conversationId` is the semantic owner. `controllerTabId` remains a live fence proving which exact
+ChatGPT/controller document is carrying that conversation; it does not become ownership authority and
+a different controller tab may not take over an existing session merely by presenting the same
+conversation id.
+
+Each BrowserSession owns its dedicated inactive Agent tab, debugger attachment, driven-tab group,
+document epoch, semantic refs, observation generation and Agent Pointer state. Consequently:
+
+- observation generation/index suffixes may match across sessions, but the complete ref is namespaced
+  by the unique first-navigate command for that BrowserSession. A ref from an older/replaced session
+  therefore cannot alias a new Agent tab, and lookup remains scoped to the caller's own session;
+- navigation/reload/history changes clear only that session's refs/epoch state;
+- debugger detach or Agent-tab closure retires only the owning session;
+- explicit Browser `detach` releases only the caller's session;
+- the Human popup detach and Browser permission revocation are global emergency boundaries and release
+  every session;
+- debugger events are routed by `source.tabId` through the reverse index, then revalidated against the
+  conversation-owned session before state changes;
+- Agent Pointer state is per session, so several Agent tabs may show independent logical pointers while
+  the macOS system pointer remains untouched.
+
+Capacity is fail-closed at **9 simultaneous Browser sessions**: the current CoS hard limit is eight
+concurrent workers, plus one slot for the prime. First-navigation creation reserves capacity before
+its first asynchronous Chrome operation, so racing conversations cannot exceed the limit. Capacity
+pressure never evicts or detaches an existing session; the new caller receives
+`BROWSER_SESSION_CAPACITY` and must explicitly free a session before retrying.
+
+The visible tab-group policy remains one group created for each dedicated Agent tab. Group identity is
+visual organization only and is never consulted as Browser ownership authority.
 
 ### Combined TASK BOX packaging
 
@@ -150,6 +194,13 @@ live acceptance. The final current-profile trial must prove all of these on the 
 - a stale ref fails closed;
 - detach removes the visual claim and debugger ownership;
 - TASK BOX/Clear durable state is unchanged by Browser acceptance.
+
+For Browser Control 0.4.x, live acceptance additionally requires at least Prime + two workers to own
+three different Agent tabs in the same current Chrome profile at once. Actions from those three
+conversations must overlap without crossing refs, pointer state, epochs or debugger targets; detaching
+one session must leave the other two attached. During that overlap the Human must be able to type in a
+different foreground application without Chrome becoming frontmost or receiving that Human input.
+Native Desktop `computer` input must not be mixed into that observation window.
 
 A failed acceptance is not permission to reinstall or repeat an ambiguous page mutation. Inspect the
 saved delivery/effect state, observe current page state, fix forward, and prepare a new feature

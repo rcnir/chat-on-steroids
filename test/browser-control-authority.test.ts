@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { composeBackground } from '../patcher/browser-control/extension-adapter.mjs';
 
 const CONVERSATION = '12345678-abcd-4abc-8abc-123456789abc';
+const CONVERSATION_B = 'abcdef12-3456-4abc-8abc-abcdef123456';
 
 async function transportHarness() {
   const source = await fs.readFile(
@@ -118,5 +119,67 @@ describe('browser-control controller authority', () => {
       '/browser/result',
       '/browser/result'
     ]);
+  });
+
+  it('coalesces one conversation while allowing another conversation to execute in parallel', async () => {
+    const transport = await transportHarness();
+    const offered = new Set<string>();
+    const nextCalls: string[] = [];
+    const resultCalls: string[] = [];
+    const call = vi.fn(async (requestPath: string, init: any) => {
+      const body = init?.body ? JSON.parse(init.body) : {};
+      const conversationId = body.conversationId as string;
+      if (requestPath === '/browser/next') {
+        nextCalls.push(conversationId);
+        const command = offered.has(conversationId)
+          ? null
+          : { id: `bc-${conversationId.slice(0, 8)}`, action: { type: 'status' } };
+        offered.add(conversationId);
+        return { ok: true, data: { ok: true, command } };
+      }
+      resultCalls.push(conversationId);
+      return { ok: true, status: 200, data: { ok: true, accepted: true, replayed: false } };
+    });
+    const bound = transport.bindBackground({ cleanConversationId: (value: unknown) => value, call });
+
+    let enterA!: () => void;
+    let enterB!: () => void;
+    const enteredA = new Promise<void>(resolve => { enterA = resolve; });
+    const enteredB = new Promise<void>(resolve => { enterB = resolve; });
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const gateA = new Promise<void>(resolve => { releaseA = resolve; });
+    const gateB = new Promise<void>(resolve => { releaseB = resolve; });
+    const executor = vi.fn(async (_action: any, command: any) => {
+      if (command.conversationId === CONVERSATION) {
+        enterA();
+        await gateA;
+      } else {
+        enterB();
+        await gateB;
+      }
+      return { ok: true, effect: 'none', data: { conversationId: command.conversationId } };
+    });
+    transport.registerExecutor(executor);
+
+    const firstA = bound.poll(CONVERSATION, () => true, 41);
+    const duplicateA = bound.poll(CONVERSATION, () => true, 41);
+    await enteredA;
+    const firstB = bound.poll(CONVERSATION_B, () => true, 42);
+    await enteredB;
+
+    expect(executor).toHaveBeenCalledTimes(2);
+    expect(nextCalls.filter(id => id === CONVERSATION)).toHaveLength(1);
+    expect(nextCalls.filter(id => id === CONVERSATION_B)).toHaveLength(1);
+
+    releaseB();
+    releaseA();
+    await expect(Promise.all([firstA, duplicateA, firstB])).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ ok: true, settled: true }),
+      expect.objectContaining({ ok: true, settled: true }),
+      expect.objectContaining({ ok: true, settled: true })
+    ]));
+    expect(resultCalls.filter(id => id === CONVERSATION)).toHaveLength(1);
+    expect(resultCalls.filter(id => id === CONVERSATION_B)).toHaveLength(1);
   });
 });

@@ -1,7 +1,7 @@
 {
-  "featureVersion": "0.3.2",
+  "featureVersion": "0.4.0",
   "protocol": 1,
-  "adapterRevision": 6,
+  "adapterRevision": 7,
   "releases": {
     "2.1.11": {
       "platform": "darwin",

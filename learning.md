@@ -198,6 +198,28 @@ Clear driver/session authority first and detach at the debugger boundary without
 command. Visual cleanup can be abandoned on that document; the refusal boundary is more important
 than cosmetic tidiness.
 
+## Multi-owner browser automation needs explicit session identity across every async boundary
+
+Replacing one global browser session with `Map<conversationId, Session>` is not sufficient if helper
+functions still read ambient current state. Different conversations can overlap on the JavaScript
+event loop, so every CDP read/write, ref lookup, pointer update and navigation check must carry the
+exact BrowserSession object that owns it. A reverse `tabId -> conversationId` index is useful for
+Chrome events, but it is routing only; semantic ownership remains the conversation-scoped Session.
+
+Global Human revocation is a different boundary from Agent-scoped detach. Close admission, advance an
+authority generation, unregister the executor and retire all semantic sessions synchronously before
+awaiting Chrome cleanup. Reopening must be generation-fenced too: an older async permission probe that
+returns `true` after a revoke must not resurrect admission. Pending first-session creation needs the
+same generation proof before publication, otherwise a create that began before OFF can appear after
+OFF completed.
+
+Semantic refs need more than a per-observation counter. Namespace them by a Session-lifetime identity
+so detach/recreate cannot re-mint an old token, and keep document epoch/generation fixed for the entire
+async observation or resolution. Build a new ref map locally and publish it only after the epoch still
+matches; recheck the same snapshot after async ref resolution before input is dispatched. Any frame
+navigation, including a child frame, invalidates that Session's refs. This prevents A→B→A aliasing
+where an old string accidentally identifies a new document or replacement Agent tab.
+
 ## A missing visible browser change is not proof of no effect
 
 After trusted browser input is dispatched, top-level readback may remain unchanged even though a
