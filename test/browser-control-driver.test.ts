@@ -141,7 +141,7 @@ describe('independent browser driver', () => {
     await h.run({ type: 'move_ref', ref: observed.data.elements[0].ref }, { controllerTabId: 99 });
     const before = h.calls.length;
     expect(h.onEvent.length).toBeGreaterThan(0);
-    h.onEvent[0]({ tabId: 20 }, 'Page.frameNavigated', { frame: { id: 'root', url: 'https://chatgpt.com/c/refused' } });
+    h.onEvent[0]!({ tabId: 20 }, 'Page.frameNavigated', { frame: { id: 'root', url: 'https://chatgpt.com/c/refused' } });
     await Promise.resolve();
     await Promise.resolve();
     await new Promise(resolve => setTimeout(resolve, 60));
