@@ -11,7 +11,8 @@ carry a broad fork diff across releases. For every new official Chat On Steroids
 
 1. read the current upstream release/tag and published macOS arm64 artifact identity;
 2. collect the exact compiled main SHA-256, companion tree fingerprint and bridge protocol;
-3. compare the authenticated browser bridge seams and compiled model-tool registration seams;
+3. compare the authenticated browser bridge seams, compiled model-tool registration seams, Desktop
+   capability/status seams and extension worker/permission shape;
 4. perform upstream-absorption review before carrying a local Browser repair forward;
 5. keep the release unsupported if any exact seam/artifact check is missing or changed;
 6. advance TASK BOX's own release matrix before attempting a combined Browser candidate;
@@ -35,7 +36,13 @@ npm run browser:prepare -- \
   --base-descriptor "/path/to/adopted/task-box-package.json"
 ```
 
-`prepare` operates on a copy. It must not:
+`prepare` operates on a copy. Before Browser writes its first byte, the Browser packager re-proves the
+TASK BOX candidate's full bundle fingerprint, main hash and companion fingerprint against the
+TASK BOX descriptor produced by that same prepare. Browser then composes one completed main containing
+the bridge, model tool, publish-time capability gate, call-time live permission guard and current
+status alignment.
+
+`prepare` must not:
 
 - stop or replace the installed app;
 - reload the live Chrome companion;
@@ -44,13 +51,15 @@ npm run browser:prepare -- \
 - drive a page;
 - run TASK BOX Clear or alter Project lifecycle state.
 
-The prepared descriptor must keep `liveAcceptance:false` for Browser Control.
+The prepared descriptor must keep `liveAcceptance:false` for Browser Control and must record the
+current-profile-only, no-native-fallback, no-foreground-escalation and capability/status invariants.
 
 ## Apply boundary
 
 Apply only after the candidate fingerprints/signature and saved TASK BOX state have been reviewed.
-The app must already be stopped. `browser:apply` delegates to the existing TASK BOX stopped-app
-installer; Browser Control does not own another replacement mechanism.
+The app must already be stopped. `browser:apply` first validates the Browser receipt against the
+current Browser feature/release contract, then delegates to the existing TASK BOX stopped-app
+installer. Browser Control does not own another replacement mechanism.
 
 ```sh
 npm run browser:apply -- \
@@ -60,8 +69,10 @@ npm run browser:apply -- \
   --old-clear-disabled
 ```
 
-Do not use a repeating/persistent launchd job for a one-shot cutover. A failed post-start acceptance
-check is not authority to apply the same candidate again.
+The shared installer rechecks the complete candidate fingerprint, ASAR, main entry, companion,
+Info.plist and code signature before replacement. Do not use a repeating/persistent launchd job for
+a one-shot cutover. A failed post-start acceptance check is not authority to apply the same candidate
+again.
 
 ## One-time Chrome permission activation
 
@@ -75,24 +86,33 @@ Human approval/re-enable. Treat that as a one-time Human boundary:
   `tabGroups` permissions;
 - later ordinary updates must not prompt again unless the permission set genuinely changes.
 
+The CoS Desktop `control` capability is a separate authority from Chrome extension permissions.
+Browser may enter the Desktop connector schema only when `exposedCaps.control` allowed publication,
+and every Browser call must still pass the live `reg.guarded('control', 'browser', ...)` check. A
+cached schema is never permission to execute after the Human turns control off.
+
 ## Current-profile live acceptance
 
 Keep the user's current Chrome profile and existing sessions. Do not create a temporary profile.
 Use a harmless web test target and verify the following in order:
 
-1. Desktop connector discovery exposes the `browser` tool.
-2. `navigate` creates an `active:false` dedicated Agent tab and leaves existing Human tabs untouched.
-3. `observe` returns semantic refs and a bounded screenshot.
-4. `move_ref` moves only the page Agent Pointer.
-5. `click_ref` performs trusted browser input without moving the macOS pointer.
-6. `set_value` and/or `type` work without stealing Human application focus.
-7. `scroll` works or reports an ambiguous effect without granting blind retry.
-8. While Agent actions run, the Human moves the physical mouse and types in another foreground app;
+1. Start/reconnect the Desktop endpoint with `control` enabled and confirm connector discovery plus
+   current app status expose `browser`.
+2. After publication, switch `control` off and make one cached Browser call. It must return
+   `TOOL_DISABLED`, perform no Browser action and disappear from the current live status/tool list.
+   Re-enable control only if needed for the rest of this harmless acceptance run.
+3. `navigate` creates an `active:false` dedicated Agent tab and leaves existing Human tabs untouched.
+4. `observe` returns semantic refs and a bounded screenshot.
+5. `move_ref` moves only the page Agent Pointer.
+6. `click_ref` performs trusted browser input without moving the macOS pointer.
+7. `set_value` and/or `type` work without stealing Human application focus.
+8. `scroll` works or reports an ambiguous effect without granting blind retry.
+9. While Agent actions run, the Human moves the physical mouse and types in another foreground app;
    Chrome must not become frontmost automatically and Human keyboard focus must remain with that app.
-9. Reuse a stale ref after a new observation/navigation and confirm fail-closed refusal.
-10. Attempt controller/ChatGPT and non-http(s) targets and confirm refusal.
-11. `detach` removes debugger ownership, driven-tab grouping and the Agent Pointer.
-12. Re-read TASK BOX/Clear durable state; Browser acceptance must not change it.
+10. Reuse a stale ref after a new observation/navigation and confirm fail-closed refusal.
+11. Attempt controller/ChatGPT and non-http(s) targets and confirm refusal.
+12. `detach` removes debugger ownership, driven-tab grouping and the Agent Pointer.
+13. Re-read TASK BOX/Clear durable state; Browser acceptance must not change it.
 
 If a collected mutation loses its result, observe/reconcile current state. Do not repeat the mutation
 merely because the expected visible change was not observed.
@@ -100,7 +120,7 @@ merely because the expected visible change was not observed.
 ## Upstream 2.1.12 evidence
 
 During Browser Control development, official 2.1.12 macOS-arm64 artifacts were inspected against
-2.1.11. The relevant Browser bridge/background and compiled model-registration seams remained
+2.1.11. The relevant Browser bridge/background, model-registration and Desktop surface seams remained
 compatible, while the upstream release focused on model-picker compatibility. This is evidence that
 the independent-module design keeps update cost low.
 
