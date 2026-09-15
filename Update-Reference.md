@@ -10,6 +10,8 @@
 
 **分離実装の検証と、稼働中のアプリへの反映は別です。** 2.0.6 で得た旧統合版の実機 PASS を、新しい分離版や 2.0.7 の実機 PASS に流用してはいけません。配布候補の作成はアプリを起動しません。実際の切替・Chrome 拡張再読み込み・必要な実機受け入れは別途記録します。
 
+Independent Browser Control を組み合わせる場合の追加の互換性確認・combined candidate・current-profile live acceptance は [`docs/browser-control-update-runbook.md`](docs/browser-control-update-runbook.md) を正本補足として使用します。TASK BOX の停止下入替境界は共用し、Browser Control のために別のinstallerやChrome profileを作りません。
+
 ## バージョンは三つに分ける
 
 | 管理対象 | 正本 | 意味 |

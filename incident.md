@@ -99,3 +99,64 @@ work. The action name was not re-verified immediately before the write.
 - After a feature branch exists, use PR-specific actions for PR creation; do not reuse branch-create
   actions as a transition step.
 - Treat unexpected refs as an incident and neutralize them before continuing.
+
+## 2026-09-16 — Browser Control 0.3.0 lost the cached-tool refusal path after live permission revocation
+
+### Scope
+
+Independent Browser Control Task 3 live acceptance on Chat On Steroids 2.1.11 with the combined
+TASK BOX 1.0.8 + Browser Control 0.3.0 candidate.
+
+### What happened
+
+The Browser Agent's core live behavior passed: a dedicated inactive Agent tab was created in the
+current Chrome profile, semantic observe/move/click/input worked without moving the macOS pointer or
+raising Chrome, refused targets failed closed, stale refs were rejected, and detach released Browser
+ownership.
+
+The final permission-guard check exposed a contract mismatch. After Browser had already been
+published with Desktop `control` enabled, the Human switched `Control mouse and keyboard` off. The
+expected Task 3 behavior was for the cached `browser` schema to remain registered and for the next
+call to reach `reg.guarded('control', 'browser', ...)`, returning `TOOL_DISABLED` with no Browser
+action.
+
+Instead, the current 2.1.11 settings path cleared the generic MCP surface-exposure snapshot as part of
+the capability change. The stale/cached Browser call was therefore rejected before the Browser
+handler could produce the promised `TOOL_DISABLED` result.
+
+### Impact
+
+No Browser action executed while control was off. The permission revocation remained fail-closed, so
+this was a discovery/refusal-contract failure rather than an authority bypass. TASK BOX/Clear durable
+state stayed unchanged and the Chrome profile was never switched or replaced.
+
+The 0.3.0 candidate was not accepted as Task 3 complete.
+
+### Cause
+
+Browser Control 0.3.0 correctly added a publish-time `exposedCaps.control` gate, a live
+`reg.guarded('control', 'browser', ...)` handler guard, and live status alignment. It did not account
+for Chat On Steroids 2.1.11 calling `forgetExposedSurface()` on effective capability changes. That
+host-level reset erased Browser's previously published schema before the local monotonic exposure
+contract could matter.
+
+### Containment and forward fix
+
+- The failed acceptance was treated as an observation/reconciliation problem; the 0.3.0 candidate was
+  not re-applied.
+- Browser Control was first advanced to feature 0.3.1 / adapter revision 5. Live validation proved
+  the cached Browser call then reached `TOOL_DISABLED`, but independent review found that latch was
+  process-scoped and could outlive an in-process MCP endpoint reconnect.
+- Browser Control was therefore advanced again to feature 0.3.2 / adapter revision 6 before Task 3
+  closeout. The Browser-specific latch is reset at each new MCP endpoint start, remains unpublished
+  if that endpoint never exposed control, and survives only settings-time generic exposure resets
+  inside that endpoint.
+- The latch grants no execution authority. Every Browser call still passes the live
+  `reg.guarded('control', 'browser', ...)` check, while status continues to follow current
+  `caps.control`.
+
+### Prevention
+
+For features that promise cached-schema continuity, include the host's real settings mutation and
+schema-refresh behavior in acceptance. Unit tests over the local registrar/handler are necessary but
+not sufficient when the host owns a broader discovery cache lifecycle.

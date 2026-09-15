@@ -2,9 +2,11 @@ import vm from 'node:vm';
 
 const TOOL_GUARD_SEAM = `function __rcnirRegisterBrowserTool(reg) {
   const coord =`;
-const TOOL_GUARD_WITH_CONTROL = `function __rcnirRegisterBrowserTool(reg) {
+const TOOL_GUARD_WITH_CONTROL = `let __rcnirBrowserControlPublished = false;
+function __rcnirRegisterBrowserTool(reg) {
   // BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD
-  if (!reg?.exposedCaps?.control) return;
+  if (reg?.exposedCaps?.control) __rcnirBrowserControlPublished = true;
+  if (!__rcnirBrowserControlPublished) return;
   const coord =`;
 
 const HANDLER_START_SEAM = `  }, async (input2) => {
@@ -22,6 +24,12 @@ const HANDLER_END_WITH_CONTROL = `    return { content };
 
 const MACOS_STATUS_SEAM = `  if (platform !== "win32") return [...caps.screen ? ["observe"] : [], ...caps.control || caps.clipboardRead || caps.clipboardWrite ? ["computer"] : []];`;
 const MACOS_STATUS_WITH_BROWSER = `  if (platform !== "win32") return [...caps.screen ? ["observe"] : [], ...caps.control || caps.clipboardRead || caps.clipboardWrite ? ["computer"] : [], ...caps.control ? ["browser"] : []];`;
+
+const ENDPOINT_RESET_SEAM = `  forgetExposedSurface();
+  const stableContext = (surface) => {`;
+const ENDPOINT_RESET_WITH_BROWSER = `  __rcnirBrowserControlPublished = false;
+  forgetExposedSurface();
+  const stableContext = (surface) => {`;
 
 function count(source, needle) {
   let total = 0;
@@ -44,12 +52,14 @@ export function restoreBrowserSurfaceContract(source) {
   requireUnique(source, HANDLER_START_WITH_CONTROL, 'guarded browser handler start');
   requireUnique(source, HANDLER_END_WITH_CONTROL, 'guarded browser handler end');
   requireUnique(source, MACOS_STATUS_WITH_BROWSER, 'browser status tools');
+  requireUnique(source, ENDPOINT_RESET_WITH_BROWSER, 'browser endpoint publication reset');
 
   const restored = source
     .replace(HANDLER_END_WITH_CONTROL, HANDLER_END_SEAM)
     .replace(HANDLER_START_WITH_CONTROL, HANDLER_START_SEAM)
     .replace(TOOL_GUARD_WITH_CONTROL, TOOL_GUARD_SEAM)
-    .replace(MACOS_STATUS_WITH_BROWSER, MACOS_STATUS_SEAM);
+    .replace(MACOS_STATUS_WITH_BROWSER, MACOS_STATUS_SEAM)
+    .replace(ENDPOINT_RESET_WITH_BROWSER, ENDPOINT_RESET_SEAM);
   new vm.Script(restored, { filename: 'browser-control-surface-restored-main.js' });
   return {
     source: restored,
@@ -61,10 +71,13 @@ export function restoreBrowserSurfaceContract(source) {
  * Final model-surface alignment for supported macOS Browser candidates.
  *
  * Browser authority is separate from native input, but publishing it through the Desktop connector
- * must still respect the existing CoS `control` capability. Exposure is monotonic for one endpoint,
- * so the handler also uses the kernel's live `reg.guarded` check after publication. The same
- * capability drives the app's status/tool list so Setup cannot claim Browser as live when its
- * permission is currently off.
+ * must still respect the existing CoS `control` capability. CoS 2.1.11 deliberately clears its
+ * generic exposure snapshot after an explicit settings change, so Browser keeps only its own
+ * endpoint-lifetime fact: whether Browser was ever published while control was exposed. A fresh
+ * MCP endpoint resets that fact before rebuilding its first surface. That latch
+ * never grants execution authority; every call still uses the kernel's live `reg.guarded` check.
+ * The same live capability drives the app's status/tool list so Setup cannot claim Browser as live
+ * when its permission is currently off.
  */
 export function composeBrowserSurfaceContract(source) {
   if (typeof source !== 'string' || source.includes('BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD')) {
@@ -74,11 +87,13 @@ export function composeBrowserSurfaceContract(source) {
   requireUnique(source, HANDLER_START_SEAM, 'browser live capability handler start');
   requireUnique(source, HANDLER_END_SEAM, 'browser live capability handler end');
   requireUnique(source, MACOS_STATUS_SEAM, 'macOS desktop status tools');
+  requireUnique(source, ENDPOINT_RESET_SEAM, 'browser endpoint publication reset');
 
   let patched = source.replace(TOOL_GUARD_SEAM, TOOL_GUARD_WITH_CONTROL);
   patched = patched.replace(HANDLER_START_SEAM, HANDLER_START_WITH_CONTROL);
   patched = patched.replace(HANDLER_END_SEAM, HANDLER_END_WITH_CONTROL);
   patched = patched.replace(MACOS_STATUS_SEAM, MACOS_STATUS_WITH_BROWSER);
+  patched = patched.replace(ENDPOINT_RESET_SEAM, ENDPOINT_RESET_WITH_BROWSER);
   new vm.Script(patched, { filename: 'browser-control-surface-aligned-main.js' });
 
   const restored = restoreBrowserSurfaceContract(patched);

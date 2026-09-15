@@ -251,3 +251,33 @@ the intended operation only in conversational context. Re-check the exact action
 immediately before each write, especially when transitioning from branch preparation to PR creation.
 If an unintended ref is created, neutralize it before continuing and record the event rather than
 silently treating it as harmless cleanup.
+
+## A tool-local live guard is not enough if the host can erase its published schema first
+
+A feature can correctly implement both an exposure-time publication gate and a live call-time
+permission guard and still fail the cached-schema contract if the host application clears its generic
+surface-exposure cache on a settings change before the tool is rebuilt.
+
+When a feature promises that an already-published cached tool will remain callable only to return a
+clean `TOOL_DISABLED` refusal, live acceptance must exercise the **host settings lifecycle**, not only
+the feature's registrar and handler in isolation. Prove the sequence: publish while enabled → revoke
+the permission through the real settings path → issue one stale/cached call → confirm the call reaches
+the live guard and performs no side effect.
+
+If the host deliberately resets generic exposure on settings changes, preserve only the minimum
+feature-specific publication fact needed to keep that already-published tool registered. That retained
+fact is discovery continuity, never execution authority: every call must still re-read the live
+permission. Do not disable the host's broader reset semantics merely to make one addon monotonic.
+
+Any retained publication fact must use the same lifetime as the host schema promise. If reconnect can create a fresh MCP endpoint inside the same process, a module-global/process-global latch is too broad: reset it at endpoint creation, not merely at process start.
+
+## Do not mix native Desktop input into a non-stealing Browser acceptance observation window
+
+A Browser Agent can be perfectly independent of the OS pointer while a nearby acceptance step still
+moves the Human pointer because the test harness used the ordinary Desktop `computer` path for setup
+or inspection. That contaminates the exact Human observation the feature is meant to prove.
+
+During the interval used to judge "Agent did not steal pointer/focus", use Browser Control actions only.
+Perform native Desktop setup before or after that interval, or have the Human change the required
+setting manually. Attribute any observed pointer/focus movement to the execution path that actually
+issued it before classifying the Browser Agent itself.
