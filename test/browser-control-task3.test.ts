@@ -76,11 +76,12 @@ describe('Browser Control Task 3 model-facing wiring', () => {
     expect(composed.source).toContain('never moves the macOS pointer');
   });
 
-  it('gates Browser publication on Desktop control and aligns the status tool list', () => {
+  it('gates Browser publication and every call on Desktop control, and aligns the status tool list', () => {
     const model = composeModelTool(MODEL_TOOL_SOURCE).source;
     const surfaced = composeBrowserSurfaceContract(model).source;
     expect(surfaced).toContain('BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD');
     expect(surfaced).toContain('if (!reg?.exposedCaps?.control) return;');
+    expect(surfaced).toContain('reg.guarded("control", "browser"');
     expect(surfaced).toContain('...caps.control ? ["browser"] : []');
     expect(() => composeBrowserSurfaceContract(surfaced)).toThrow(/ALREADY_PATCHED/);
     expect(() => composeBrowserSurfaceContract(model.replace('platform !== "win32"', 'platform === "darwin"')))
@@ -109,6 +110,7 @@ describe('Browser Control Task 3 model-facing wiring', () => {
 
       const surfaced = composeBrowserSurfaceContract(combined.source);
       expect(surfaced.source).toContain('BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD');
+      expect(surfaced.source).toContain('reg.guarded("control", "browser"');
       expect(surfaced.source).toContain('...caps.control ? ["browser"] : []');
       expect(surfaced.insertedBytes).toBeGreaterThan(0);
     } finally {
