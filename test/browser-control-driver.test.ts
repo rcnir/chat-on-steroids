@@ -134,6 +134,23 @@ describe('independent browser driver', () => {
     expect(h.chrome.debugger.detach).toHaveBeenCalledWith({ tabId: 20 });
   });
 
+  it('hard-detaches a refused main frame without sending another page command', async () => {
+    const h = await harness();
+    await h.run({ type: 'navigate', url: 'https://example.com/' }, { controllerTabId: 99 });
+    const observed = await h.run({ type: 'observe' }, { controllerTabId: 99 });
+    await h.run({ type: 'move_ref', ref: observed.data.elements[0].ref }, { controllerTabId: 99 });
+    const before = h.calls.length;
+    expect(h.onEvent.length).toBeGreaterThan(0);
+    h.onEvent[0]({ tabId: 20 }, 'Page.frameNavigated', { frame: { id: 'root', url: 'https://chatgpt.com/c/refused' } });
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise(resolve => setTimeout(resolve, 60));
+    const after = h.calls.slice(before);
+    expect(after).toHaveLength(0);
+    expect(h.chrome.debugger.detach).toHaveBeenCalledWith({ tabId: 20 });
+    expect(await h.driver.status()).toMatchObject({ attached: false });
+  });
+
   it('makes earlier refs stale after a new observation', async () => {
     const h = await harness();
     await h.run({ type: 'navigate', url: 'https://example.com/' }, { controllerTabId: 99 });
@@ -142,6 +159,12 @@ describe('independent browser driver', () => {
     await h.run({ type: 'observe' }, { controllerTabId: 99 });
     const stale = await h.run({ type: 'click_ref', ref }, { controllerTabId: 99 });
     expect(stale).toMatchObject({ ok: false, error: 'BROWSER_STALE_REF', effect: 'none', retrySafe: true });
+  });
+
+  it('keeps ambiguous wheel delivery unknown when the top-level scroll position does not prove movement', async () => {
+    const source = await fs.readFile(DRIVER, 'utf8');
+    expect(source).toContain("effect: changed ? 'confirmed' : 'unknown'");
+    expect(source).toContain('retrySafe: false');
   });
 
   it('does not register an executor unless debugger and optional tab permissions are held', async () => {
