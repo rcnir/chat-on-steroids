@@ -53,13 +53,13 @@ A reviewable Task 3 head must prove:
 The current Task 3 source review found no remaining Browser-specific blocker. Official 2.1.11 and
 2.1.12 macOS-arm64 compiled mains were checked against the current model/surface seam set. In both
 artifacts the publish guard, call-time `reg.guarded` wrapper and status seam each matched exactly once;
-the surface transform added 171 bytes, parsed under Node and reversed byte-exact to the model-wired
-input. This is source/update-resilience evidence, not full repository CI or product acceptance.
+the surface transform parsed under Node and reversed byte-exact to the model-wired input. This is
+source/update-resilience evidence, not full repository CI or product acceptance.
 
 The fork still produces no GitHub Actions workflow run for the Task 3 PR, and this execution
 environment cannot clone GitHub to run `npm verify`. Therefore CI/full verify is deliberately **not**
-claimed. The exact combined candidate must still be prepared and tested on the actual Mac before
-Task 3 can be called live-complete.
+claimed from source review alone. The exact combined candidate has been prepared separately; Task 3
+still requires its actual-Mac live acceptance before it can be called live-complete.
 
 The first 0.3.0 live candidate exposed one contract gap that source-only review did not exercise.
 Chat On Steroids 2.1.11 deliberately clears its generic per-surface exposure snapshot after an
