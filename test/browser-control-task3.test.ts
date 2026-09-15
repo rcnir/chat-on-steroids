@@ -95,7 +95,7 @@ describe('Browser Control Task 3 model-facing wiring', () => {
     expect(() => composeModelTool(MODEL_TOOL_SOURCE.replace('else registerDesktopTools(nested);', 'else registerDesktopTools(other);'))).toThrow(/SEAM_MISMATCH/);
   });
 
-  it('composes the production TASK BOX main path before final capability/status alignment', () => {
+  it('returns one completed production TASK BOX main with bridge, tool, live guard and status alignment', () => {
     const release = feature.releases['2.1.11'];
     const priorHash = release.mainSha256;
     try {
@@ -107,12 +107,12 @@ describe('Browser Control Task 3 model-facing wiring', () => {
       expect(combined.source).toContain('RC_BROWSER_CONTROL_LOADER_V1');
       expect(combined.source).toContain('__rcnirBrowserControl.handleBridge');
       expect(combined.source).toContain('__rcnirRegisterBrowserTool');
-
-      const surfaced = composeBrowserSurfaceContract(combined.source);
-      expect(surfaced.source).toContain('BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD');
-      expect(surfaced.source).toContain('reg.guarded("control", "browser"');
-      expect(surfaced.source).toContain('...caps.control ? ["browser"] : []');
-      expect(surfaced.insertedBytes).toBeGreaterThan(0);
+      expect(combined.source).toContain('BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD');
+      expect(combined.source).toContain('if (!reg?.exposedCaps?.control) return;');
+      expect(combined.source).toContain('reg.guarded("control", "browser"');
+      expect(combined.source).toContain('...caps.control ? ["browser"] : []');
+      expect(combined.surfaceInsertedBytes).toBeGreaterThan(0);
+      expect(() => composeBrowserSurfaceContract(combined.source)).toThrow(/ALREADY_PATCHED/);
     } finally {
       release.mainSha256 = priorHash;
     }
