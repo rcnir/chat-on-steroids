@@ -3,6 +3,7 @@ import vm from 'node:vm';
 const TOOL_GUARD_SEAM = `function __rcnirRegisterBrowserTool(reg) {
   const coord =`;
 const TOOL_GUARD_WITH_CONTROL = `function __rcnirRegisterBrowserTool(reg) {
+  // BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD
   if (!reg?.exposedCaps?.control) return;
   const coord =`;
 
@@ -38,18 +39,12 @@ export function composeBrowserSurfaceContract(source) {
   requireUnique(source, TOOL_GUARD_SEAM, 'browser tool registrar');
   requireUnique(source, MACOS_STATUS_SEAM, 'macOS desktop status tools');
 
-  let patched = source.replace(
-    TOOL_GUARD_SEAM,
-    `function __rcnirRegisterBrowserTool(reg) {\n  // BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD\n  if (!reg?.exposedCaps?.control) return;\n  const coord =`
-  );
+  let patched = source.replace(TOOL_GUARD_SEAM, TOOL_GUARD_WITH_CONTROL);
   patched = patched.replace(MACOS_STATUS_SEAM, MACOS_STATUS_WITH_BROWSER);
   new vm.Script(patched, { filename: 'browser-control-surface-aligned-main.js' });
 
   const restored = patched
-    .replace(
-      `function __rcnirRegisterBrowserTool(reg) {\n  // BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD\n  if (!reg?.exposedCaps?.control) return;\n  const coord =`,
-      TOOL_GUARD_SEAM
-    )
+    .replace(TOOL_GUARD_WITH_CONTROL, TOOL_GUARD_SEAM)
     .replace(MACOS_STATUS_WITH_BROWSER, MACOS_STATUS_SEAM);
   if (restored !== source) throw new Error('BROWSER_CONTROL_SURFACE_ADAPTER_PRESERVATION_FAILED');
 
