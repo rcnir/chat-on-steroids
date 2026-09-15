@@ -14,6 +14,7 @@ import {
   composeTaskBoxMain,
   sha256
 } from './main-adapter.mjs';
+import { composeBrowserSurfaceContract } from './surface-adapter.mjs';
 import {
   composeBackground as composeBrowserBackground,
   composeManifest as composeBrowserManifest
@@ -75,7 +76,8 @@ function updateInfoPlist(candidate, integrity) {
 function validateBrowserDescriptor(descriptor) {
   if (!descriptor || descriptor.kind !== 'rocaniiru-task-box-package' || descriptor.protocol !== 1 ||
       descriptor.browserControl?.schema !== 1 || descriptor.browserControl?.featureVersion !== browserFeature.featureVersion ||
-      descriptor.browserControl?.featureFingerprint !== featureFingerprint() || descriptor.browserControl?.protocol !== browserFeature.protocol) {
+      descriptor.browserControl?.featureFingerprint !== featureFingerprint() || descriptor.browserControl?.protocol !== browserFeature.protocol ||
+      descriptor.browserControl?.controlCapabilityGated !== true || descriptor.browserControl?.statusToolListAligned !== true) {
     throw new Error('BROWSER_CONTROL_PREPARED_FEATURE_MISMATCH');
   }
   return descriptor;
@@ -109,11 +111,13 @@ export async function prepareCombinedAddon({ appPath = DEFAULT_APP, outputRoot, 
     throw new Error('BROWSER_CONTROL_ORIGINAL_EXTENSION_MISMATCH');
   }
 
-  // Compose the model-facing tool + app-side browser bridge into the exact TASK BOX main.
+  // Compose the model-facing tool + app-side browser bridge into the exact TASK BOX main, then
+  // align Browser publication/status with the existing CoS Desktop `control` capability.
   const taskBoxMain = asar.extractFile(archive, MAIN).toString();
   const browserMain = composeTaskBoxMain(taskBoxMain, originalMain, version);
+  const surfacedMain = composeBrowserSurfaceContract(browserMain.source);
   const mainFile = path.join(root, 'browser-control-composed-main.js');
-  writeFileSync(mainFile, browserMain.source);
+  writeFileSync(mainFile, surfacedMain.source);
   const repacked = await rebuildAsarWithMain(archive, mainFile);
 
   // Layer browser transport/driver into the already-composed TASK BOX companion.
@@ -155,12 +159,14 @@ export async function prepareCombinedAddon({ appPath = DEFAULT_APP, outputRoot, 
     protocol: browserFeature.protocol,
     adapterRevision: browserFeature.adapterRevision,
     upstream: release,
-    mainInsertedBytes: browserMain.insertedBytes,
+    mainInsertedBytes: browserMain.insertedBytes + surfacedMain.insertedBytes,
     runtimeFingerprint: fingerprintTree(browserAddon),
     currentChromeProfileOnly: true,
     alternateProfileCreated: false,
     nativeDesktopFallback: false,
     foregroundEscalation: false,
+    controlCapabilityGated: true,
+    statusToolListAligned: true,
     debuggerPermissionActivation: 'human-required-on-first-enable',
     liveAcceptance: false
   };
