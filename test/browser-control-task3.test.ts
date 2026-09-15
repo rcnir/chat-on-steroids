@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error Plain ESM build-time module.
-import { composeModelTool } from '../patcher/browser-control/main-adapter.mjs';
+import { composeModelTool, composeTaskBoxMain, feature, sha256 } from '../patcher/browser-control/main-adapter.mjs';
 // @ts-expect-error Plain ESM build-time module.
 import { composeBrowserSurfaceContract } from '../patcher/browser-control/surface-adapter.mjs';
 // @ts-expect-error Plain ESM build-time module.
@@ -32,6 +32,16 @@ function buildServer(ctx, surface) {
     return nested.invokeNested(name, args, parent);
   });
   return registrar;
+}
+`;
+
+const TASK_BOX_MAIN = MODEL_TOOL_SOURCE + `
+// RC_TASK_BOX_LOADER_V1
+const __rcnirTaskBox = { handleTaskBox: async () => false };
+async function handle$1(req, res) {
+  const url = null, route = "", origin = "", readBody = null, json = null, tooLarge = null;
+  if (await __rcnirTaskBox.handleTaskBox({req, res, url, route, origin, readBody, json, tooLarge})) return;
+  if (route === "/models" && req.method === "POST") {}
 }
 `;
 
@@ -82,6 +92,29 @@ describe('Browser Control Task 3 model-facing wiring', () => {
     expect(() => composeModelTool(composed)).toThrow(/ALREADY_PATCHED/);
     expect(() => composeModelTool(MODEL_TOOL_SOURCE.replace('"computer", "exec"', '"computer"'))).toThrow(/SEAM_MISMATCH/);
     expect(() => composeModelTool(MODEL_TOOL_SOURCE.replace('else registerDesktopTools(nested);', 'else registerDesktopTools(other);'))).toThrow(/SEAM_MISMATCH/);
+  });
+
+  it('composes the production TASK BOX main path before final capability/status alignment', () => {
+    const release = feature.releases['2.1.11'];
+    const priorHash = release.mainSha256;
+    try {
+      // composeTaskBoxMain deliberately requires exact official-byte authority. This fixture swaps
+      // only that authority value so the production composer itself can be exercised without
+      // weakening the real release table used by packaging.
+      release.mainSha256 = sha256(MODEL_TOOL_SOURCE);
+      const combined = composeTaskBoxMain(TASK_BOX_MAIN, MODEL_TOOL_SOURCE, '2.1.11');
+      expect(combined.source).toContain('RC_BROWSER_CONTROL_LOADER_V1');
+      expect(combined.source).toContain('__rcnirBrowserControl.handleBridge');
+      expect(combined.source).toContain('__rcnirRegisterBrowserTool');
+
+      const surfaced = composeBrowserSurfaceContract(combined.source);
+      expect(surfaced.source).toContain('BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD');
+      expect(surfaced.source).toContain('...caps.control ? ["browser"] : []');
+      expect(surfaced.insertedBytes).toBeGreaterThan(0);
+    } finally {
+      release.mainSha256 = priorHash;
+    }
+    expect(feature.releases['2.1.11'].mainSha256).toBe(priorHash);
   });
 });
 
