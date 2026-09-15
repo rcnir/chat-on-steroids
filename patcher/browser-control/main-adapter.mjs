@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { composeBrowserSurfaceContract, restoreBrowserSurfaceContract } from './surface-adapter.mjs';
 
 export const feature = JSON.parse(readFileSync(new URL('./feature.json', import.meta.url), 'utf8'));
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -258,16 +259,18 @@ export function composeMain(source, version) {
   };
 }
 
-/** Task 3 standalone composition: Task 1 transport + model-facing browser tool. */
+/** Task 3 standalone composition: transport + tool + publication/live capability contract. */
 export function composeModelFacingMain(source, version) {
   const transport = composeMain(source, version);
   const tool = composeModelTool(transport.source);
+  const surface = composeBrowserSurfaceContract(tool.source);
   return {
     ...transport,
-    source: tool.source,
-    sha256: sha256(tool.source),
+    source: surface.source,
+    sha256: sha256(surface.source),
     modelToolSeams: tool.seams,
-    insertedBytes: transport.insertedBytes + tool.insertedBytes
+    surfaceInsertedBytes: surface.insertedBytes,
+    insertedBytes: transport.insertedBytes + tool.insertedBytes + surface.insertedBytes
   };
 }
 
@@ -292,10 +295,12 @@ export function composeTaskBoxMain(taskBoxSource, officialSource, version) {
   );
   patched = patched.replace('"use strict";\n', '"use strict";\n' + LOADER);
   const tool = composeModelTool(patched);
-  patched = tool.source;
+  const surface = composeBrowserSurfaceContract(tool.source);
+  patched = surface.source;
   new vm.Script(patched, { filename: 'task-box-browser-control-main.js' });
 
-  const restoredWithoutTool = patched
+  const withoutSurface = restoreBrowserSurfaceContract(patched).source;
+  const restoredWithoutTool = withoutSurface
     .replace(NESTED_REGISTRATION_WITH_BROWSER, NESTED_REGISTRATION_SEAM)
     .replace(DIRECT_REGISTRATION_WITH_BROWSER, DIRECT_REGISTRATION_SEAM)
     .replace(BROWSER_TOOL_BLOCK, '')
@@ -307,6 +312,7 @@ export function composeTaskBoxMain(taskBoxSource, officialSource, version) {
     sourceSha256: release.mainSha256,
     sha256: sha256(patched),
     modelToolSeams: tool.seams,
+    surfaceInsertedBytes: surface.insertedBytes,
     insertedBytes: Buffer.byteLength(patched) - Buffer.byteLength(taskBoxSource)
   };
 }
