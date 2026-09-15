@@ -14,6 +14,8 @@
     "patcher:intake": "node patcher/task-box/release-intake.mjs",
     "patcher:prepare": "node patcher/task-box/package.mjs prepare",
     "patcher:apply": "node patcher/task-box/package.mjs apply",
+    "browser:prepare": "node patcher/browser-control/package.mjs prepare",
+    "browser:apply": "node patcher/browser-control/package.mjs apply",
     "predev": "npm run feature:sync",
     "prebuild": "npm run feature:sync",
     "pretest": "npm run feature:sync",
