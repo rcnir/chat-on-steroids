@@ -91,6 +91,13 @@ Browser may enter the Desktop connector schema only when `exposedCaps.control` a
 and every Browser call must still pass the live `reg.guarded('control', 'browser', ...)` check. A
 cached schema is never permission to execute after the Human turns control off.
 
+On Chat On Steroids 2.1.11, an explicit settings change clears the host's generic exposure snapshot.
+Browser Control therefore keeps a separate process-lifetime publication latch from 0.3.1 onward:
+the latch can become true only after Browser was actually published with `control` exposed, and it
+exists only to preserve the stale-schema refusal path across that host reset. It never authorizes a
+Browser action. Live `control` still governs `reg.guarded`, and the current status/tool list still
+uses the live capability rather than the latch.
+
 ## Current-profile live acceptance
 
 Keep the user's current Chrome profile and existing sessions. Do not create a temporary profile.

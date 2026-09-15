@@ -2,9 +2,11 @@ import vm from 'node:vm';
 
 const TOOL_GUARD_SEAM = `function __rcnirRegisterBrowserTool(reg) {
   const coord =`;
-const TOOL_GUARD_WITH_CONTROL = `function __rcnirRegisterBrowserTool(reg) {
+const TOOL_GUARD_WITH_CONTROL = `let __rcnirBrowserControlPublished = false;
+function __rcnirRegisterBrowserTool(reg) {
   // BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD
-  if (!reg?.exposedCaps?.control) return;
+  if (reg?.exposedCaps?.control) __rcnirBrowserControlPublished = true;
+  if (!__rcnirBrowserControlPublished) return;
   const coord =`;
 
 const HANDLER_START_SEAM = `  }, async (input2) => {
@@ -61,10 +63,12 @@ export function restoreBrowserSurfaceContract(source) {
  * Final model-surface alignment for supported macOS Browser candidates.
  *
  * Browser authority is separate from native input, but publishing it through the Desktop connector
- * must still respect the existing CoS `control` capability. Exposure is monotonic for one endpoint,
- * so the handler also uses the kernel's live `reg.guarded` check after publication. The same
- * capability drives the app's status/tool list so Setup cannot claim Browser as live when its
- * permission is currently off.
+ * must still respect the existing CoS `control` capability. CoS 2.1.11 deliberately clears its
+ * generic exposure snapshot after an explicit settings change, so Browser keeps only its own
+ * process-lifetime fact: whether Browser was ever published while control was exposed. That latch
+ * never grants execution authority; every call still uses the kernel's live `reg.guarded` check.
+ * The same live capability drives the app's status/tool list so Setup cannot claim Browser as live
+ * when its permission is currently off.
  */
 export function composeBrowserSurfaceContract(source) {
   if (typeof source !== 'string' || source.includes('BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD')) {

@@ -61,6 +61,18 @@ environment cannot clone GitHub to run `npm verify`. Therefore CI/full verify is
 claimed. The exact combined candidate must still be prepared and tested on the actual Mac before
 Task 3 can be called live-complete.
 
+The first 0.3.0 live candidate exposed one contract gap that source-only review did not exercise.
+Chat On Steroids 2.1.11 deliberately clears its generic per-surface exposure snapshot after an
+explicit capability change. Browser therefore disappeared from a stale Desktop schema before its
+`reg.guarded('control', 'browser', ...)` handler could return `TOOL_DISABLED`. No Browser action was
+executed while control was off, so this was fail-closed, but it did not satisfy the Task 3 cached-call
+contract. Browser Control 0.3.1 / adapter revision 5 fixes this narrowly with a Browser-only
+process-lifetime publication latch: Browser must first be published while `control` is exposed, then
+that publication fact survives 2.1.11's generic exposure reset while live execution authority still
+comes only from `reg.guarded`. Other Desktop/Core exposure behavior is unchanged. The 0.3.0 live
+candidate must not be re-applied to hide this result; 0.3.1 requires a new candidate and live guard
+acceptance.
+
 `docs/browser-control-update-runbook.md` is the current Browser Control supplement to
 `Update-Reference.md`. The canonical `Update-Reference.md` itself still needs a short link/entry to
 that supplement during Task 3 closeout. That edit is intentionally deferred to a normal Git working

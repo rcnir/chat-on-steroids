@@ -80,7 +80,9 @@ describe('Browser Control Task 3 model-facing wiring', () => {
     const model = composeModelTool(MODEL_TOOL_SOURCE).source;
     const surfaced = composeBrowserSurfaceContract(model).source;
     expect(surfaced).toContain('BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD');
-    expect(surfaced).toContain('if (!reg?.exposedCaps?.control) return;');
+    expect(surfaced).toContain('let __rcnirBrowserControlPublished = false;');
+    expect(surfaced).toContain('if (reg?.exposedCaps?.control) __rcnirBrowserControlPublished = true;');
+    expect(surfaced).toContain('if (!__rcnirBrowserControlPublished) return;');
     expect(surfaced).toContain('reg.guarded("control", "browser"');
     expect(surfaced).toContain('...caps.control ? ["browser"] : []');
     expect(() => composeBrowserSurfaceContract(surfaced)).toThrow(/ALREADY_PATCHED/);
@@ -108,7 +110,9 @@ describe('Browser Control Task 3 model-facing wiring', () => {
       expect(combined.source).toContain('__rcnirBrowserControl.handleBridge');
       expect(combined.source).toContain('__rcnirRegisterBrowserTool');
       expect(combined.source).toContain('BROWSER_CONTROL_SURFACE_CAPABILITY_GUARD');
-      expect(combined.source).toContain('if (!reg?.exposedCaps?.control) return;');
+      expect(combined.source).toContain('let __rcnirBrowserControlPublished = false;');
+      expect(combined.source).toContain('if (reg?.exposedCaps?.control) __rcnirBrowserControlPublished = true;');
+      expect(combined.source).toContain('if (!__rcnirBrowserControlPublished) return;');
       expect(combined.source).toContain('reg.guarded("control", "browser"');
       expect(combined.source).toContain('...caps.control ? ["browser"] : []');
       expect(combined.surfaceInsertedBytes).toBeGreaterThan(0);

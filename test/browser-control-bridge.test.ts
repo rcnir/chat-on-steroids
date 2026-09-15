@@ -199,7 +199,7 @@ describe('upstream-preserving Task 2 adapters', () => {
     const source = `const BRIDGE_PROTOCOL = 13;\nfunction cleanConversationId(v) { return v; }\nfunction call() {}\nfunction ownsDocument() { return true; }\nconst HANDLERS = {\n  async activity(message, _sender, source) {\n    await load();\n    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };\n    await noteTabConversation(source, message.conversationId);\n    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };\n    const query =\n      \`?conversationId=\${encodeURIComponent(message.conversationId)}\` +\n      \`&since=\${Number(message.since) || 0}\` +\n      \`&goalClient=\${encodeURIComponent(String(source.tab))}\`;\n    const result = await call(\`/activity\${query}\`);\n    return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };\n  }\n};\n`;
     const composed = composeBackground(source, { appVersion: '2.1.11' });
     expect(composed).toContain('CLFBrowserControlTransport?.bindBackground');
-    expect(composed).toContain('__rcnirBrowserControlTransport.poll(message.conversationId, __rcnirBrowserControlStillOwns)');
+    expect(composed).toContain('__rcnirBrowserControlTransport.poll(message.conversationId, __rcnirBrowserControlStillOwns, source.tab)');
     expect(() => composeBackground(composed, { appVersion: '2.1.11' })).toThrow(/SOURCE_ALREADY_COMPOSED/);
 
     const manifest = { version: '2.1.11', permissions: ['storage', 'scripting', 'alarms'], background: { service_worker: 'background.js', type: 'module' } };
