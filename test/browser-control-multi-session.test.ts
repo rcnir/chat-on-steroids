@@ -52,6 +52,7 @@ async function harness() {
   let releaseResolve: (() => void) | null = null;
   let resolveEnteredResolve: (() => void) | null = null;
   let resolveEntered: Promise<void> = Promise.resolve();
+  let blankFrameTreeUrl = false;
 
   function tabFor(id: number) {
     return tabs.get(id) || null;
@@ -134,7 +135,7 @@ async function harness() {
           await mouseDispatchGate;
         }
         if (method === 'Page.getFrameTree') {
-          return { frameTree: { frame: { id: `root-${tabId}`, url: tab?.url || '' }, childFrames: [] } };
+          return { frameTree: { frame: { id: `root-${tabId}`, url: blankFrameTreeUrl ? '' : (tab?.url || '') }, childFrames: [] } };
         }
         if (method === 'Page.createIsolatedWorld') return { executionContextId: tabId * 10 };
         if (method === 'Page.getLayoutMetrics') {
@@ -282,6 +283,7 @@ async function harness() {
       resolveGate = null;
       release?.();
     },
+    setBlankFrameTreeUrl(value: boolean) { blankFrameTreeUrl = value; },
     maxConcurrentInsertText() { return maxConcurrentInsertText; }
   };
 }
@@ -303,6 +305,16 @@ async function navigate(h: DriverHarness, conversationId: string, controllerTabI
 }
 
 describe('browser-control multi-session driver', () => {
+  it('does not treat a transient empty CDP frame URL as a refused top-level page', async () => {
+    const h = await harness();
+    h.setBlankFrameTreeUrl(true);
+    await expect(h.run(
+      { type: 'navigate', url: 'https://dash.cloudflare.com/' },
+      command(CONVERSATION_A, 90)
+    )).resolves.toMatchObject({ ok: true, data: { created: true } });
+    expect(h.attached.size).toBe(1);
+  });
+
   it('creates independent Agent tabs and permits commands from different conversations to overlap', async () => {
     const h = await harness();
     const tabA = await navigate(h, CONVERSATION_A, 90, 'https://a.example/');

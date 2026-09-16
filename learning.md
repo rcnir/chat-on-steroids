@@ -303,3 +303,17 @@ During the interval used to judge "Agent did not steal pointer/focus", use Brows
 Perform native Desktop setup before or after that interval, or have the Human change the required
 setting manually. Attribute any observed pointer/focus movement to the execution path that actually
 issued it before classifying the Browser Agent itself.
+
+## A Browser failure is not authority to cross into native Desktop control
+
+Tool boundaries are authority boundaries, not merely implementation preferences. A Browser Agent may
+promise never to move the OS pointer, while the adjacent Desktop `computer` tool is explicitly allowed
+to do so. Failure of the non-stealing path must therefore fail closed inside that path; it must not be
+interpreted as permission to switch to the more powerful native-control surface.
+
+Make this explicit in both tool descriptions and error results. If native Desktop control is needed,
+it requires independent Human intent rather than being inferred from a Browser error.
+
+For navigation/refusal checks, do not treat transient empty renderer/CDP URL state as proof that a tab
+is prohibited. Use browser-level tab state for the top-level ownership/refusal fence, and reserve CDP
+frame state for document-level behavior after authority is established.

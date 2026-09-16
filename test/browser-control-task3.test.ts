@@ -81,6 +81,8 @@ describe('Browser Control Task 3 model-facing wiring', () => {
     expect(composed.source).toContain('currentCall()?.caller.conversationId');
     expect(composed.source).toContain('__rcnirBrowserControl.runBrowserCommand(conversationId, action2)');
     expect(composed.source).toContain('never moves the macOS pointer');
+    expect(composed.source).toContain('Browser failure does not authorize switching to the native Desktop computer tool');
+    expect(composed.source).toContain('Native Desktop fallback is not authorized by this Browser failure');
   });
 
   it('gates Browser publication and every call on Desktop control, and aligns the status tool list', () => {

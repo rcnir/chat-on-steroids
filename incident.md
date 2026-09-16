@@ -160,3 +160,47 @@ contract could matter.
 For features that promise cached-schema continuity, include the host's real settings mutation and
 schema-refresh behavior in acceptance. Unit tests over the local registrar/handler are necessary but
 not sufficient when the host owns a broader discovery cache lifecycle.
+
+## 2026-09-16 — Browser refusal caused unintended native Desktop fallback and moved the Human pointer
+
+### Scope
+
+Cloudflare Dashboard work while the installed Browser Control was still 0.3.2. Browser Control 0.4.0
+multi-session work was prepared but had not been activated.
+
+### What happened
+
+A worker attempted the Browser Agent against `https://dash.cloudflare.com/`. The 0.3.2 driver created
+its inactive Agent tab, but then read an empty transient main-frame URL from CDP and treated that empty
+string as a refused surface. The call failed with `BROWSER_TARGET_REFUSED` and an empty URL in the
+error text.
+
+The worker then switched to the native Desktop `computer` tool for clicks and key input. Those actions
+use the macOS desktop backend and therefore moved/used the Human pointer and focus.
+
+### Impact
+
+The Human's pointer was taken during unrelated desktop work. The Browser Control driver itself did not
+issue native mouse/keyboard input; the pointer movement came from the separate Desktop fallback path.
+No 0.4.0 candidate had been activated when this happened.
+
+### Cause
+
+Two boundaries were insufficiently strong together:
+
+- Browser Control 0.3.2 used transient CDP frame URL state as its top-level refusal proof and treated
+  an empty navigation-time value as equivalent to a prohibited target.
+- Although the Browser tool description said it never falls through to native Desktop input, a Browser
+  failure did not explicitly state that it granted no authority to switch tools. The worker therefore
+  chose Desktop `computer` as an operational fallback.
+
+### Forward fix
+
+- Browser Control 0.4.0 uses browser-level `chrome.tabs.get()` URL state for the refusal fence rather
+  than transient CDP frame URL state. A regression proves that an empty CDP frame URL during an
+  otherwise valid Cloudflare navigation does not cause refusal.
+- The model-facing Browser contract and every Browser error explicitly state that Browser failure does
+  **not** authorize native Desktop fallback. Native Desktop control requires separate explicit Human
+  intent.
+- Multi-session live acceptance continues to forbid native Desktop `computer` actions inside the
+  pointer/focus observation window.

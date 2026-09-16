@@ -137,7 +137,8 @@ function __rcnirRegisterBrowserTool(reg) {
     description:
       "Drive an ordinary web page through the Browser Agent. Use observe to get semantic refs, then prefer move_ref/click_ref/set_value. " +
       "The Browser Agent uses a dedicated inactive tab in the current Chrome profile, never drives ChatGPT, never moves the macOS pointer, " +
-      "and never falls through to native Desktop input. Stops at the first failed action; after an ambiguous mutation, observe before another mutation.",
+      "and never falls through to native Desktop input. A Browser failure does not authorize switching to the native Desktop computer tool; " +
+      "stop and report unless the Human explicitly requested native Desktop control. Stops at the first failed action; after an ambiguous mutation, observe before another mutation.",
     inputSchema: zod.z.object({ actions: zod.z.array(action).min(1).max(20) }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
   }, async (input2) => {
@@ -154,7 +155,8 @@ function __rcnirRegisterBrowserTool(reg) {
         const detail = String(reply?.detail || "the browser action did not complete").replace(/\.\s*$/, "");
         const safety = " delivery=" + String(reply?.delivery || "unknown") + " effect=" + String(reply?.effect || "unknown") +
           " retrySafe=" + String(reply?.retrySafe === true);
-        return errorResult(String(reply?.error || "BROWSER_FAILED") + ": " + detail + ". Completed " + index + " of " + input2.actions.length + "." + safety);
+        return errorResult(String(reply?.error || "BROWSER_FAILED") + ": " + detail + ". Completed " + index + " of " + input2.actions.length + "." + safety +
+          " Native Desktop fallback is not authorized by this Browser failure; stop and report unless the Human explicitly requested native Desktop control.");
       }
       const rendered = render(action2.type, reply.data || {});
       blocks.push(rendered);
