@@ -128,7 +128,9 @@
         return reply({ok:true,recovered:true,alreadyRecovered:true,state:'present',generation});
       }
       if (before.claimed) {
-        return reply({ok:true,recoveryClaimed:true,requestId,generation,owner:before.owner,ticket:before.ticket});
+        return reply({
+          ok:true,recoveryRequired:true,recoveryClaimed:true,requestId,generation,owner:before.owner,ticket:before.ticket
+        });
       }
       if (!(await enabled())) return reply({ok:false,error:'TASK_BOX_DISABLED'});
       if (!(await capabilitiesReady())) return reply({ok:false,error:'TASK_BOX_CAPABILITY_UNAVAILABLE'});
@@ -190,9 +192,6 @@
     async function recoverCleanupReservation(requestId,generation) {
       const verified = await cleanupRecoveryStatus(requestId,generation);
       if (!verified.ok || verified.alreadyRecovered) return verified;
-      if (verified.recoveryClaimed) {
-        return reply({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_ALREADY_CLAIMED',repairOwner:verified.owner});
-      }
       if (verified.recoveryRequired !== true) {
         return reply({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE'});
       }
@@ -201,13 +200,20 @@
       }
 
       let repairTabId = null;
-      let claimed = false;
+      let claimed = verified.recoveryClaimed === true;
       try {
-        const created = await chrome.tabs.create({url:'https://chatgpt.com/',active:false});
-        repairTabId = Number.isInteger(created?.id) ? created.id : null;
-        if (repairTabId === null) return reply({ok:false,error:'TASK_BOX_CLEANUP_REPAIR_TAB_FAILED'});
+        if (claimed) {
+          repairTabId = Number.isInteger(verified.owner?.tabId) ? verified.owner.tabId : null;
+          if (repairTabId === null || !(await exactDocumentAlive(verified.owner))) {
+            return reply({ok:false,error:'TASK_BOX_CLEANUP_CLAIMED_OWNER_UNAVAILABLE',repairOwner:verified.owner});
+          }
+        } else {
+          const created = await chrome.tabs.create({url:'https://chatgpt.com/',active:false});
+          repairTabId = Number.isInteger(created?.id) ? created.id : null;
+          if (repairTabId === null) return reply({ok:false,error:'TASK_BOX_CLEANUP_REPAIR_TAB_FAILED'});
+        }
         if (!(await waitForRepairTab(repairTabId))) {
-          await chrome.tabs.remove(repairTabId).catch(() => undefined);
+          if (!claimed) await chrome.tabs.remove(repairTabId).catch(() => undefined);
           return reply({ok:false,error:'TASK_BOX_CLEANUP_REPAIR_TAB_NOT_READY'});
         }
         await chrome.scripting.executeScript({
@@ -218,7 +224,7 @@
           type:'clf-task-box-recovery:prepare',protocol:PROTOCOL,requestId,generation
         });
         if (prepared?.ok !== true || prepared.ready !== true) {
-          await chrome.tabs.remove(repairTabId).catch(() => undefined);
+          if (!claimed) await chrome.tabs.remove(repairTabId).catch(() => undefined);
           return reply({ok:false,error:prepared?.error || 'TASK_BOX_CLEANUP_REPAIR_NOT_READY'});
         }
         const executed = await chrome.tabs.sendMessage(repairTabId,{
@@ -226,6 +232,12 @@
         });
         claimed = executed?.claimed === true;
         if (executed?.ok !== true || executed.completed !== true) {
+          const durable = await coordinator.cleanupRecoveryStatus(requestId,generation);
+          if (durable?.ok && durable.alreadyRecovered === true) {
+            await chrome.tabs.remove(repairTabId).catch(() => undefined);
+            return reply({ok:true,recovered:true,state:'present',generation,repairTabClosed:true,reconciled:true});
+          }
+          if (durable?.ok && durable.claimed === true && durable.owner?.tabId === repairTabId) claimed = true;
           return reply({
             ok:false,error:executed?.error || 'TASK_BOX_CLEANUP_REPAIR_INCOMPLETE',
             repairTabId,claimed
@@ -238,7 +250,20 @@
         await chrome.tabs.remove(repairTabId).catch(() => undefined);
         return reply({ok:true,recovered:true,state:'present',generation,repairTabClosed:true});
       } catch (error) {
-        if (repairTabId !== null && !claimed) await chrome.tabs.remove(repairTabId).catch(() => undefined);
+        if (repairTabId !== null) {
+          try {
+            const durable = await coordinator.cleanupRecoveryStatus(requestId,generation);
+            if (durable?.ok && durable.alreadyRecovered === true) {
+              await chrome.tabs.remove(repairTabId).catch(() => undefined);
+              return reply({ok:true,recovered:true,state:'present',generation,repairTabClosed:true,reconciled:true});
+            }
+            if (durable?.ok && durable.claimed === true && durable.owner?.tabId === repairTabId) claimed = true;
+          } catch {
+            // The original error remains authoritative; never close a possibly claimed owner on readback failure.
+            claimed = true;
+          }
+          if (!claimed) await chrome.tabs.remove(repairTabId).catch(() => undefined);
+        }
         return reply({
           ok:false,error:String(error?.message || error || 'TASK_BOX_CLEANUP_RECOVERY_FAILED'),
           ...(repairTabId !== null ? {repairTabId} : {}),claimed
