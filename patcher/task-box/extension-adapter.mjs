@@ -10,6 +10,12 @@ const RECOVERY_RESTORE_SEAM = `    await chrome.scripting.insertCSS({ target: { 
     // Successful injection means this exact tab is recovering. Its document registration will
 `;
 const RESTORE_FUNCTION_SEAM = 'async function restoreOpenChatgptTabs() {\n';
+const ACTIVITY_RESTORE_SEAM = `  async activity(message, _sender, source) {
+    await load();
+    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+    await noteTabConversation(source, message.conversationId);
+    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+`;
 
 const AUTHORIZE_DOCUMENT_CONTRACT = `async function authorizeDocument(sender, message) {
   await load();
@@ -135,6 +141,7 @@ function validateContract(source, appVersion) {
   requireUnique(source, HEALTHY_RESTORE_SEAM, 'HEALTHY_RESTORE_SEAM_DRIFT');
   requireUnique(source, RECOVERY_RESTORE_SEAM, 'RECOVERY_RESTORE_SEAM_DRIFT');
   requireUnique(source, RESTORE_FUNCTION_SEAM, 'RESTORE_FUNCTION_SEAM_DRIFT');
+  requireUnique(source, ACTIVITY_RESTORE_SEAM, 'ACTIVITY_SEAM_DRIFT');
 }
 
 function validateFeatureContract(featureVersion, protocol) {
@@ -290,5 +297,9 @@ export function composeBackground(source, { appVersion, featureVersion, protocol
 `
   );
   output = output.replace(RESTORE_FUNCTION_SEAM, `${restoreFunctionBlock()}${RESTORE_FUNCTION_SEAM}`);
+  output = output.replace(
+    ACTIVITY_RESTORE_SEAM,
+    `${ACTIVITY_RESTORE_SEAM}    // <TASK-BOX-ADAPTER:restore-activity>\n    await restoreTaskBoxTab(source.tab);\n    // </TASK-BOX-ADAPTER:restore-activity>\n`
+  );
   return output;
 }

@@ -161,6 +161,39 @@ For features that promise cached-schema continuity, include the host's real sett
 schema-refresh behavior in acceptance. Unit tests over the local registrar/handler are necessary but
 not sufficient when the host owns a broader discovery cache lifecycle.
 
+## 2026-09-17 — TASK BOX UI disappeared after companion extension reload
+
+### Scope
+
+Post-cutover companion reload after installing Browser Control 0.4.0 on Chat On Steroids 2.1.11.
+
+### What happened
+
+After the Chrome companion extension reloaded, the visible TASK BOX UI disappeared from already-open
+ChatGPT tabs. The durable TASK BOX state was still present: `taskBoxIntegrationEnabled` remained true,
+the lifecycle remained `present`, the local extension storage existed, and the app-side Clear receipt
+remained intact.
+
+### Cause
+
+The companion already has deterministic reload recovery: it scans open ChatGPT tabs and reinjects the
+recorder plus TASK BOX. That startup repair is one-shot. If a tab is temporarily unscriptable while
+the service worker is restarting or the document is navigating, `chrome.scripting.executeScript`
+fails and the optional TASK BOX restore is intentionally swallowed so recorder startup stays healthy.
+There was no later ordinary-traffic retry dedicated to TASK BOX, so the UI could remain absent even
+though feature state and durable receipts were healthy.
+
+### Forward repair
+
+TASK BOX 1.0.9 / adapter revision 6 adds an idempotent restore at the exact current-document boundary
+of the normal ChatGPT `activity` handler. Each legitimate activity therefore re-proves the owning
+document, then ensures TASK BOX is injected into that exact tab. The content runtime already detects a
+healthy incumbent and does not duplicate observers or controls, so this converts reload recovery from
+a one-shot best effort into eventual self-healing on normal traffic.
+
+The repair is prepared on the feature branch only. It is not merged to canonical `main` until Human
+approval.
+
 ## 2026-09-16 — Browser refusal caused unintended native Desktop fallback and moved the Human pointer
 
 ### Scope
@@ -199,8 +232,8 @@ Two boundaries were insufficiently strong together:
 - Browser Control 0.4.0 uses browser-level `chrome.tabs.get()` URL state for the refusal fence rather
   than transient CDP frame URL state. A regression proves that an empty CDP frame URL during an
   otherwise valid Cloudflare navigation does not cause refusal.
-- The model-facing Browser contract and every Browser error explicitly state that Browser failure does
-  **not** authorize native Desktop fallback. Native Desktop control requires separate explicit Human
-  intent.
+- The model-facing Browser contract states that Browser failure does **not** authorize native Desktop
+  fallback, and ordinary Browser action failures repeat that instruction in their error result. Native
+  Desktop control requires separate explicit Human intent.
 - Multi-session live acceptance continues to forbid native Desktop `computer` actions inside the
   pointer/focus observation window.

@@ -28,6 +28,7 @@ function withoutInsertions(source: string) {
     .replace(/[^\S\r\n]*\/\/ <TASK-BOX-ADAPTER:dispatch>\n[\s\S]*?[^\S\r\n]*\/\/ <\/TASK-BOX-ADAPTER:dispatch>\n/, '')
     .replace(/[^\S\r\n]*\/\/ <TASK-BOX-ADAPTER:restore-healthy>\n[\s\S]*?[^\S\r\n]*\/\/ <\/TASK-BOX-ADAPTER:restore-healthy>\n/, '')
     .replace(/[^\S\r\n]*\/\/ <TASK-BOX-ADAPTER:restore-recovery>\n[\s\S]*?[^\S\r\n]*\/\/ <\/TASK-BOX-ADAPTER:restore-recovery>\n/, '')
+    .replace(/[^\S\r\n]*\/\/ <TASK-BOX-ADAPTER:restore-activity>\n[\s\S]*?[^\S\r\n]*\/\/ <\/TASK-BOX-ADAPTER:restore-activity>\n/, '')
     .replace(/\/\/ <TASK-BOX-ADAPTER:restore-function>\n[\s\S]*?\/\/ <\/TASK-BOX-ADAPTER:restore-function>\n\n/, '');
 }
 
@@ -54,6 +55,18 @@ describe('TASK BOX official background composer', () => {
     expect(output).toContain('taskBox.recoverManualDeletion(');
     expect(output).toContain("files:['task-box-compatibility.js','task-box-core.js','task-box.js']");
     expect(output.match(/await restoreTaskBoxTab\(id\);/g)).toHaveLength(2);
+    expect(output.match(/await restoreTaskBoxTab\(source\.tab\);/g)).toHaveLength(1);
+
+    const activityStart = output.indexOf('  async activity(message, _sender, source) {');
+    const noteConversation = output.indexOf('await noteTabConversation(source, message.conversationId);', activityStart);
+    const documentReproof = output.indexOf("if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };", noteConversation);
+    const restoreActivity = output.indexOf('await restoreTaskBoxTab(source.tab);', documentReproof);
+    const activityQuery = output.indexOf('const query =', restoreActivity);
+    expect(activityStart).toBeGreaterThanOrEqual(0);
+    expect(noteConversation).toBeGreaterThan(activityStart);
+    expect(documentReproof).toBeGreaterThan(noteConversation);
+    expect(restoreActivity).toBeGreaterThan(documentReproof);
+    expect(activityQuery).toBeGreaterThan(restoreActivity);
 
     // TASK BOX consumes feature globals imported before background.js by task-box-worker.js;
     // the composer never copies feature implementation or creates a second worker/listener.
@@ -121,6 +134,10 @@ describe('TASK BOX official background composer', () => {
       .toThrow(/MESSAGE_LISTENER_SEAM_DRIFT/);
     expect(() => compose('2.0.6', source.replace("files: ['overlay.css']", "files: ['overlay-next.css']")))
       .toThrow(/RECOVERY_RESTORE_SEAM_DRIFT/);
+    expect(() => compose('2.0.6', source.replace(
+      "  async activity(message, _sender, source) {\n    await load();\n    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };\n    await noteTabConversation(source, message.conversationId);\n    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };\n",
+      "  async activity(message, _sender, source) {\n    await load();\n    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };\n    await noteTabConversation(source, message.conversationId);\n    if (!ownsDocument(source)) return { ok: false, error: 'different_document' };\n"
+    ))).toThrow(/ACTIVITY_SEAM_DRIFT/);
   });
 
   it.each(['2.0.7', '2.0.8'] as const)('fails closed on authenticated call or current-document guard drift on %s', (appVersion) => {

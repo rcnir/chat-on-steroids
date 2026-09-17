@@ -293,6 +293,17 @@ permission. Do not disable the host's broader reset semantics merely to make one
 
 Any retained publication fact must use the same lifetime as the host schema promise. If reconnect can create a fresh MCP endpoint inside the same process, a module-global/process-global latch is too broad: reset it at endpoint creation, not merely at process start.
 
+## Extension reload recovery must converge after the startup window
+
+A service-worker reload is an asynchronous boundary across both the worker and every already-open
+page. A one-shot startup scan is not sufficient recovery proof: a valid tab can be temporarily
+unscriptable while it navigates, while the worker starts, or while Chrome replaces isolated worlds.
+
+For optional page features whose injection is idempotent, keep the startup scan but also repair them
+from a later ordinary, already-authorized traffic path. Re-prove the exact current document first,
+then retry only the missing/idempotent page bootstrap. Do not reload the user's tab merely to recover
+an extension UI, and do not infer durable-state loss from a missing visual control.
+
 ## Do not mix native Desktop input into a non-stealing Browser acceptance observation window
 
 A Browser Agent can be perfectly independent of the OS pointer while a nearby acceptance step still
