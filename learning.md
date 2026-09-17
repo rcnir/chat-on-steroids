@@ -328,3 +328,19 @@ it requires independent Human intent rather than being inferred from a Browser e
 For navigation/refusal checks, do not treat transient empty renderer/CDP URL state as proof that a tab
 is prohibited. Use browser-level tab state for the top-level ownership/refusal fence, and reserve CDP
 frame state for document-level behavior after authority is established.
+
+## Durable mutation tickets need an owner-loss recovery state, not an owner reset
+
+An owner-bound browser mutation can finish its destructive phase and still strand a later constructive
+phase if the exact page document disappears. Do not solve that by clearing the global lifecycle or by
+assigning the ticket to whatever page happens to be open: both erase evidence about what already ran.
+
+Recovery must re-prove the transition that minted the stranded ticket. For a cleanup-recreation ticket,
+that means proving the prior Clear attempt and app receipt, the expected generation transition, and the
+absence of the old exact owner before changing ownership. Transfer the **same** ticket to a dedicated
+repair document, record the old and new owner in a recovery receipt, and complete the normal state
+machine from there.
+
+If the constructive mutation becomes ambiguous after the transfer, preserve that repair document and
+reconcile observed state before any second click. A recovery path must not turn owner loss into mutation
+replay.

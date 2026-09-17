@@ -322,4 +322,11 @@ Core / Desktop / Pluginsは2.1.11上で実callを通し、`mcp-activity` に3 su
 
 macOS native backendは `screen=granted accessibility=granted execution=in-process`。Desktop UIAによるharmless browser操作も成功し、更新後もpointer pathは動作した。以上により **CoS 2.1.11 + TASK BOX 1.0.8 live acceptance = PASS** とする。
 
+## TASK BOX 1.0.9 / 1.0.10 — extension reload self-heal / orphaned cleanup recovery / 2026-09-17
+
+- 1.0.9 / adapter 6: extension reload直後の一発再注入が失敗しても、exact current-documentで受けた通常`activity`からTASK BOX injectionをidempotentに再試行する。
+- 1.0.10 / adapter 7: completed Clear + confirmed Project deletion後の`reserved / mode=cleanup`がowner document消失で孤児化した場合のみ、同一request・generation・completed Clear attempt・app receipt・旧document不在を再証明して、専用inactive repair tabへ同じcreation ticketを移譲できる。
+- recoveryはClear / Project deletionを再実行しない。Project作成の結果が不明な場合はrepair tabを保持し、既存TASK BOXを観測して同じticketをcompleteする。二重Createは禁止。
+- Browser Control 0.4.0とのcombined candidateとして検証する。canonical `main` へのmergeは別Human Reviewとする。
+
 切替runnerの外部所有には `launchctl submit` を使用したが、このMacではsuccessful exit後もsubmitted jobがlaunchdに残り、およそ10秒間隔で再起動された。最初のrunだけがQuit/Replace/Startへ進み、stageを消費した後の全再起動は冒頭の `verified stage missing before quit` でfail-closedしたため追加mutationは0だった。jobは直ちにlaunchd domainから削除し、以後存在しないことを確認した。**`launchctl submit` はone-shot cutover primitiveとして使用しない。** 事故事実はroot `incident.md` に分離して残す。

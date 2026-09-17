@@ -104,6 +104,148 @@
       return reply(recovered);
     }
 
+    async function exactDocumentAlive(owner) {
+      if (!owner || !Number.isInteger(owner.tabId) || typeof owner.documentId !== 'string' || !owner.documentId) return false;
+      try {
+        const response = await chrome.tabs.sendMessage(
+          owner.tabId,
+          {type:'clf-task-box-recovery:ping',protocol:PROTOCOL},
+          {documentId:owner.documentId}
+        );
+        return response?.ok === true && response.protocol === PROTOCOL;
+      } catch {
+        return false;
+      }
+    }
+
+    async function cleanupRecoveryStatus(requestId,generation) {
+      if (!validRequest(requestId) || !Number.isInteger(generation) || generation < 1) {
+        return reply({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE'});
+      }
+      const before = await coordinator.cleanupRecoveryStatus(requestId,generation);
+      if (!before.ok) return reply(before);
+      if (before.alreadyRecovered) {
+        return reply({ok:true,recovered:true,alreadyRecovered:true,state:'present',generation});
+      }
+      if (before.claimed) {
+        return reply({ok:true,recoveryClaimed:true,requestId,generation,owner:before.owner,ticket:before.ticket});
+      }
+      if (!(await enabled())) return reply({ok:false,error:'TASK_BOX_DISABLED'});
+      if (!(await capabilitiesReady())) return reply({ok:false,error:'TASK_BOX_CAPABILITY_UNAVAILABLE'});
+
+      const afterCapability = await coordinator.cleanupRecoveryStatus(requestId,generation);
+      if (!afterCapability.ok || afterCapability.claimed || afterCapability.alreadyRecovered ||
+          !sameOwner(afterCapability.owner,before.owner)) {
+        return reply({ok:false,error:'TASK_BOX_STATE_CHANGED'});
+      }
+      const query = new URLSearchParams({
+        requestId,
+        tabId:String(before.owner.tabId),
+        documentId:before.owner.documentId
+      });
+      const result = await call(`/task-box/clear/status?${query.toString()}`, {method:'GET'});
+      if (!exactCompleted(result,requestId)) {
+        return reply({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE'});
+      }
+      if (await exactDocumentAlive(before.owner)) {
+        return reply({ok:false,error:'TASK_BOX_CLEANUP_OWNER_STILL_LIVE'});
+      }
+      const afterReceipt = await coordinator.cleanupRecoveryStatus(requestId,generation);
+      if (!afterReceipt.ok || afterReceipt.claimed || afterReceipt.alreadyRecovered ||
+          !sameOwner(afterReceipt.owner,before.owner)) {
+        return reply({ok:false,error:'TASK_BOX_STATE_CHANGED'});
+      }
+      return reply({ok:true,recoveryRequired:true,requestId,generation,orphanedOwner:before.owner});
+    }
+
+    async function claimCleanupRecovery(owner,requestId,generation) {
+      const verified = await cleanupRecoveryStatus(requestId,generation);
+      if (!verified.ok || verified.alreadyRecovered) return verified;
+      if (verified.recoveryClaimed) {
+        if (!sameOwner(verified.owner,owner)) return reply({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_CLAIMED'});
+        return verified;
+      }
+      if (verified.recoveryRequired !== true) {
+        return reply({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE'});
+      }
+      return reply(await coordinator.claimCleanupRecovery(owner,requestId,generation));
+    }
+
+    const pause = ms => new Promise(resolve => setTimeout(resolve,ms));
+
+    async function waitForRepairTab(tabId) {
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          const address = String(tab?.pendingUrl || tab?.url || '');
+          if (tab?.status === 'complete' && /^https:\/\/chatgpt\.com\//i.test(address)) return tab;
+        } catch {
+          return null;
+        }
+        await pause(100);
+      }
+      return null;
+    }
+
+    async function recoverCleanupReservation(requestId,generation) {
+      const verified = await cleanupRecoveryStatus(requestId,generation);
+      if (!verified.ok || verified.alreadyRecovered) return verified;
+      if (verified.recoveryClaimed) {
+        return reply({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_ALREADY_CLAIMED',repairOwner:verified.owner});
+      }
+      if (verified.recoveryRequired !== true) {
+        return reply({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE'});
+      }
+      if (!chrome.tabs?.create || !chrome.tabs?.sendMessage || !chrome.scripting?.executeScript) {
+        return reply({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_BROWSER_UNAVAILABLE'});
+      }
+
+      let repairTabId = null;
+      let claimed = false;
+      try {
+        const created = await chrome.tabs.create({url:'https://chatgpt.com/',active:false});
+        repairTabId = Number.isInteger(created?.id) ? created.id : null;
+        if (repairTabId === null) return reply({ok:false,error:'TASK_BOX_CLEANUP_REPAIR_TAB_FAILED'});
+        if (!(await waitForRepairTab(repairTabId))) {
+          await chrome.tabs.remove(repairTabId).catch(() => undefined);
+          return reply({ok:false,error:'TASK_BOX_CLEANUP_REPAIR_TAB_NOT_READY'});
+        }
+        await chrome.scripting.executeScript({
+          target:{tabId:repairTabId},
+          files:['task-box-compatibility.js','task-box-core.js','task-box.js']
+        });
+        const prepared = await chrome.tabs.sendMessage(repairTabId,{
+          type:'clf-task-box-recovery:prepare',protocol:PROTOCOL,requestId,generation
+        });
+        if (prepared?.ok !== true || prepared.ready !== true) {
+          await chrome.tabs.remove(repairTabId).catch(() => undefined);
+          return reply({ok:false,error:prepared?.error || 'TASK_BOX_CLEANUP_REPAIR_NOT_READY'});
+        }
+        const executed = await chrome.tabs.sendMessage(repairTabId,{
+          type:'clf-task-box-recovery:execute',protocol:PROTOCOL,requestId,generation
+        });
+        claimed = executed?.claimed === true;
+        if (executed?.ok !== true || executed.completed !== true) {
+          return reply({
+            ok:false,error:executed?.error || 'TASK_BOX_CLEANUP_REPAIR_INCOMPLETE',
+            repairTabId,claimed
+          });
+        }
+        const final = await coordinator.cleanupRecoveryStatus(requestId,generation);
+        if (!final.ok || final.alreadyRecovered !== true) {
+          return reply({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_UNCONFIRMED',repairTabId,claimed:true});
+        }
+        await chrome.tabs.remove(repairTabId).catch(() => undefined);
+        return reply({ok:true,recovered:true,state:'present',generation,repairTabClosed:true});
+      } catch (error) {
+        if (repairTabId !== null && !claimed) await chrome.tabs.remove(repairTabId).catch(() => undefined);
+        return reply({
+          ok:false,error:String(error?.message || error || 'TASK_BOX_CLEANUP_RECOVERY_FAILED'),
+          ...(repairTabId !== null ? {repairTabId} : {}),claimed
+        });
+      }
+    }
+
     async function authorizeDelete(owner,ticket) {
       if (!validClearTicket(ticket)) return reply({ok:false,error:'INVALID_TASK_BOX_DELETE_TICKET'});
       // This is the linearization point for feature revocation before native ChatGPT
@@ -195,6 +337,10 @@
         if (!currentDocument(assertCurrent)) return staleDocument();
         return reply(await coordinator.completeCreation(owner,message.ticket));
       }
+      if (action === 'claim-cleanup-recovery') {
+        if (!currentDocument(assertCurrent)) return staleDocument();
+        return claimCleanupRecovery(owner,message.requestId,message.generation);
+      }
       if (action === 'confirm-deleted') {
         if (!currentDocument(assertCurrent)) return staleDocument();
         return reply(await coordinator.confirmDeletion(owner,message.ticket));
@@ -237,7 +383,8 @@
     }
 
     return Object.freeze({
-      handles,handle,manualDeletionRecoveryStatus,recoverManualDeletion,protocol:PROTOCOL
+      handles,handle,manualDeletionRecoveryStatus,recoverManualDeletion,
+      cleanupRecoveryStatus,recoverCleanupReservation,protocol:PROTOCOL
     });
   }
 

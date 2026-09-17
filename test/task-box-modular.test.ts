@@ -108,7 +108,7 @@ describe('independent TASK BOX package contract', () => {
   it.each(['2.0.6', '2.0.7', '2.0.8', '2.0.9', '2.1.11'])('generates separate feature and upstream %s identities', version => {
     const box: any = {};
     vm.runInNewContext(compatibilityScript(version), box);
-    expect(box.CLFTaskBoxCompatibility).toMatchObject({ appVersion: version, featureVersion: '1.0.9', protocol: 1, adapterRevision: 6 });
+    expect(box.CLFTaskBoxCompatibility).toMatchObject({ appVersion: version, featureVersion: '1.0.10', protocol: 1, adapterRevision: 7 });
     const original = { version, background: { service_worker: 'background.js', type: 'module' },
       permissions: ['storage', 'scripting'], content_scripts: [{ js: ['content.js'], matches: ['https://chatgpt.com/*'] }] };
     const assembled = composeManifest(original, version);

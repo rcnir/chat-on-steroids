@@ -17,7 +17,7 @@ const sender={id:'test-companion',url:setupUrl,frameId:0};
 const setupHtml=readFileSync(new URL('../patcher/task-box/extension/task-box-setup.html',import.meta.url),'utf8');
 const setupJs=readFileSync(new URL('../patcher/task-box/extension/task-box-setup.js',import.meta.url),'utf8');
 function harness(seed:Record<string,any>={},capable=true,receiptCompleted=true){
-  const data=structuredClone(seed);let writes=0;let calls=0;let recoveries=0;let recoveryChecks=0;
+  const data=structuredClone(seed);let writes=0;let calls=0;let recoveries=0;let recoveryChecks=0;let cleanupRecoveries=0;let cleanupRecoveryChecks=0;
   const taskBox:any={protocol:1};
   taskBox.manualDeletionRecoveryStatus=async(requestId:string,generation:number)=>{
     recoveryChecks++;
@@ -41,6 +41,21 @@ function harness(seed:Record<string,any>={},capable=true,receiptCompleted=true){
     data.taskBoxCreationGlobal={state:'open',generation:generation+1};
     return {ok:true,recovered:true,state:'open',generation:generation+1};
   };
+  taskBox.cleanupRecoveryStatus=async(requestId:string,generation:number)=>{
+    cleanupRecoveryChecks++;
+    const current=data.taskBoxCreationGlobal;
+    if(current?.state!=='reserved'||current?.mode!=='cleanup'||current.requestId!==requestId||current.generation!==generation){
+      return {ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE'};
+    }
+    return {ok:true,recoveryRequired:true,requestId,generation};
+  };
+  taskBox.recoverCleanupReservation=async(requestId:string,generation:number)=>{
+    const verified=await taskBox.cleanupRecoveryStatus(requestId,generation);
+    if(!verified.ok) return verified;
+    cleanupRecoveries++;
+    data.taskBoxCreationGlobal={state:'present',generation};
+    return {ok:true,recovered:true,state:'present',generation,repairTabClosed:true};
+  };
   const ctx:any={taskBox,TASK_BOX_CONTRACT:{protocol:1},console,URLSearchParams,chrome:{runtime:{id:'test-companion',getURL:()=>setupUrl},storage:{local:{
     get:async(keys:string|string[])=>Object.fromEntries((Array.isArray(keys)?keys:[keys]).filter(k=>k in data).map(k=>[k,structuredClone(data[k])])),
     set:async(values:Record<string,any>)=>{writes++;Object.assign(data,structuredClone(values));}
@@ -50,7 +65,8 @@ function harness(seed:Record<string,any>={},capable=true,receiptCompleted=true){
     throw new Error(`unexpected ${route}`);
   }};
   vm.runInNewContext(setupSource,ctx);
-  return {data,setup:ctx.setup,writes:()=>writes,calls:()=>calls,recoveries:()=>recoveries,recoveryChecks:()=>recoveryChecks};
+  return {data,setup:ctx.setup,writes:()=>writes,calls:()=>calls,recoveries:()=>recoveries,recoveryChecks:()=>recoveryChecks,
+    cleanupRecoveries:()=>cleanupRecoveries,cleanupRecoveryChecks:()=>cleanupRecoveryChecks};
 }
 describe('TASK BOX explicit extension-origin cutover',()=>{
   it('refuses a ChatGPT page or another extension before reading capability or writing state',async()=>{
@@ -126,6 +142,34 @@ describe('TASK BOX explicit extension-origin cutover',()=>{
     }
   });
 
+  it('offers orphaned cleanup recovery only for the exact reserved cleanup and requires both acknowledgements',async()=>{
+    const requestId='11111111-2222-4333-8444-555555555551';
+    const seed={taskBoxIntegrationEnabled:true,taskBoxCreationGlobal:{
+      state:'reserved',generation:15,mode:'cleanup',requestId,owner:{tabId:17,documentId:'document-17'}
+    }};
+    const h=harness(seed);
+    expect(await h.setup({type:'clf-task-box-setup:status'},sender)).toMatchObject({
+      ok:true,enabled:true,cleanupRecoveryRequired:true,cleanupRecoveryRequestId:requestId,cleanupRecoveryGeneration:15
+    });
+    expect(h.cleanupRecoveryChecks()).toBe(1);
+    for(const message of [
+      {requestId,generation:15,previousOutcomeReviewed:false,inactiveRepairTabApproved:true},
+      {requestId,generation:15,previousOutcomeReviewed:true,inactiveRepairTabApproved:false},
+      {requestId:'33333333-4444-4555-8666-777777777771',generation:15,previousOutcomeReviewed:true,inactiveRepairTabApproved:true},
+      {requestId,generation:14,previousOutcomeReviewed:true,inactiveRepairTabApproved:true}
+    ]){
+      expect(await h.setup({type:'clf-task-box-setup:recover-cleanup',...message},sender))
+        .toMatchObject({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_CONFIRMATION_REQUIRED'});
+      expect(h.cleanupRecoveries()).toBe(0);
+    }
+    expect(await h.setup({
+      type:'clf-task-box-setup:recover-cleanup',requestId,generation:15,
+      previousOutcomeReviewed:true,inactiveRepairTabApproved:true
+    },sender)).toMatchObject({ok:true,recovered:true,state:'present',generation:15});
+    expect(h.cleanupRecoveries()).toBe(1);
+    expect(h.data.taskBoxCreationGlobal).toEqual({state:'present',generation:15});
+  });
+
   it('shows a dedicated recovery confirmation and sends the exact status binding only after both acknowledgements',async()=>{
     const requestId='11111111-2222-4333-8444-555555555551';
     const sendMessage=vi.fn(async(message:any)=>{
@@ -156,6 +200,44 @@ describe('TASK BOX explicit extension-origin cutover',()=>{
     });
     await vi.waitFor(()=>expect(sendMessage.mock.calls.filter(([message])=>message.type==='clf-task-box-setup:status')).toHaveLength(2));
     await vi.waitFor(()=>expect(button.disabled).toBe(false));
+    dom.window.close();
+  });
+
+  it('shows cleanup recovery separately and sends its exact request only after both acknowledgements',async()=>{
+    const requestId='11111111-2222-4333-8444-555555555551';
+    let recovered=false;
+    const sendMessage=vi.fn(async(message:any)=>{
+      if(message.type==='clf-task-box-setup:status') return recovered
+        ? {ok:true,available:true,enabled:true}
+        : {ok:true,available:true,enabled:true,cleanupRecoveryRequired:true,cleanupRecoveryRequestId:requestId,cleanupRecoveryGeneration:15};
+      if(message.type==='clf-task-box-setup:recover-cleanup') {
+        recovered=true;
+        return {ok:true,recovered:true,state:'present',generation:15,repairTabClosed:true};
+      }
+      throw new Error(`unexpected ${message.type}`);
+    });
+    const dom=new JSDOM(setupHtml,{url:setupUrl,runScripts:'outside-only'});
+    Object.assign(dom.window,{chrome:{runtime:{sendMessage}}});
+    dom.window.eval(setupJs);
+    const document=dom.window.document;
+    await vi.waitFor(()=>expect((document.getElementById('cleanupRecovery') as HTMLElement).hidden).toBe(false));
+    expect((document.getElementById('cutover') as HTMLElement).hidden).toBe(true);
+    expect((document.getElementById('recovery') as HTMLElement).hidden).toBe(true);
+    const button=document.getElementById('recoverCleanup') as HTMLButtonElement;
+    const reviewed=document.getElementById('cleanupReviewed') as HTMLInputElement;
+    const approved=document.getElementById('inactiveRepairApproved') as HTMLInputElement;
+    expect(button.disabled).toBe(true);
+    reviewed.click(); expect(button.disabled).toBe(true);
+    approved.click(); expect(button.disabled).toBe(false);
+    button.click();
+    await vi.waitFor(()=>expect(sendMessage.mock.calls.some(([message])=>message.type==='clf-task-box-setup:recover-cleanup')).toBe(true));
+    const recoveryCall=sendMessage.mock.calls.find(([message])=>message.type==='clf-task-box-setup:recover-cleanup')?.[0];
+    expect(recoveryCall).toEqual({
+      type:'clf-task-box-setup:recover-cleanup',requestId,generation:15,
+      previousOutcomeReviewed:true,inactiveRepairTabApproved:true
+    });
+    await vi.waitFor(()=>expect(sendMessage.mock.calls.filter(([message])=>message.type==='clf-task-box-setup:status')).toHaveLength(2));
+    await vi.waitFor(()=>expect((document.getElementById('cleanupRecovery') as HTMLElement).hidden).toBe(true));
     dom.window.close();
   });
 });

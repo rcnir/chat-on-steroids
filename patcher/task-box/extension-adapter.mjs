@@ -172,6 +172,24 @@ async function taskBoxSetup(message,sender) {
     return taskBox.recoverManualDeletion(message.requestId,message.generation);
   }
 
+  if (lifecycle?.state === 'reserved' && lifecycle.mode === 'cleanup' &&
+      typeof lifecycle.requestId === 'string' && Number.isInteger(lifecycle.generation) && lifecycle.generation > 0) {
+    if (message.type === 'clf-task-box-setup:recover-cleanup') {
+      if (message.previousOutcomeReviewed !== true || message.inactiveRepairTabApproved !== true ||
+          message.requestId !== lifecycle.requestId || message.generation !== lifecycle.generation) {
+        return {ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_CONFIRMATION_REQUIRED'};
+      }
+      return taskBox.recoverCleanupReservation(message.requestId,message.generation);
+    }
+    if (message.type !== 'clf-task-box-setup:status') return {ok:false,error:'TASK_BOX_LIFECYCLE_BLOCKED'};
+    const cleanup=await taskBox.cleanupRecoveryStatus(lifecycle.requestId,lifecycle.generation);
+    if (cleanup?.ok !== true || cleanup.recoveryRequired !== true) {
+      return {ok:false,error:cleanup?.error || 'TASK_BOX_LIFECYCLE_BLOCKED'};
+    }
+    return {ok:true,available:true,enabled:state.taskBoxIntegrationEnabled === true,cleanupRecoveryRequired:true,
+      cleanupRecoveryRequestId:cleanup.requestId,cleanupRecoveryGeneration:cleanup.generation,error:null};
+  }
+
   if (lifecycle !== undefined && !['open','present'].includes(lifecycle?.state)) {
     if (message.type !== 'clf-task-box-setup:status' || lifecycle?.state !== 'deleting' || lifecycle.kind !== 'clear' ||
         lifecycle.clearCompleted !== true || typeof lifecycle.requestId !== 'string' ||

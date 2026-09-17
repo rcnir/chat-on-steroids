@@ -4,7 +4,7 @@
   const C = globalThis.CLFTaskBoxCore;
   if (!C) return;
   const PROTOCOL = 1;
-  const ADAPTER_REVISION = 3;
+  const ADAPTER_REVISION = 4;
   const COMPANION_VERSION = globalThis.CLFTaskBoxCompatibility?.appVersion;
   const FEATURE_KEY = 'taskBoxIntegrationEnabled';
 
@@ -52,6 +52,7 @@
   let runtimeStopped = false;
   let runtimeVersion = null;
   let observer = null;
+  let recoveryMessageListener = null;
   let globalLifecycleState;
   const ownedControls = new Set();
   const eventController = new AbortController();
@@ -67,6 +68,8 @@
     observer?.disconnect();
     eventController.abort();
     try { chrome.storage?.onChanged?.removeListener(onLifecycleStorageChanged); } catch {}
+    try { if (recoveryMessageListener) chrome.runtime?.onMessage?.removeListener(recoveryMessageListener); } catch {}
+    recoveryMessageListener = null;
     nativeDeleteWatch = null;
     pendingBoxClearMenu = null;
     for (const button of ownedControls) {
@@ -864,6 +867,66 @@
     return created;
   }
 
+  async function cleanupRecoveryPreparation() {
+    requireExtensionRuntime();
+    const existing = assertTaskBoxSidebarNotAmbiguous();
+    if (existing.length === 1) return {ok:true,ready:true,existing:true};
+    const createItem = await waitFor(() =>
+      findVisibleByLabels(CREATE_LABELS, document, true) ||
+      findUniqueByLabels(CREATE_LABELS, document, true),
+    3500);
+    if (!createItem) return {ok:false,error:'NEW_PROJECT_CONTROL_NOT_FOUND'};
+    return {ok:true,ready:true,existing:false};
+  }
+
+  async function executeCleanupRecovery(requestId,generation) {
+    const prepared = await cleanupRecoveryPreparation();
+    if (!prepared.ok) return prepared;
+    const claim = await taskBoxMessage('claim-cleanup-recovery',{requestId,generation});
+    if (!claim?.ok || !claim.ticket) {
+      return {ok:false,claimed:false,error:claim?.error || 'TASK_BOX_CLEANUP_RECOVERY_CLAIM_FAILED'};
+    }
+    const ticket = claim.ticket;
+    try {
+      const existing = assertTaskBoxSidebarNotAmbiguous();
+      if (existing.length === 1) {
+        await completeCreation(ticket);
+        return {ok:true,claimed:true,completed:true,existing:true};
+      }
+      await createTaskBoxFromSidebar(ticket);
+      return {ok:true,claimed:true,completed:true,existing:false};
+    } catch (error) {
+      // Creation can become ambiguous after the click even though the Project now exists. Never
+      // click Create a second time: reconcile an exact single TASK BOX by completing the same ticket.
+      try {
+        const existing = assertTaskBoxSidebarNotAmbiguous();
+        if (existing.length === 1) {
+          await completeCreation(ticket);
+          return {ok:true,claimed:true,completed:true,existing:true,reconciled:true};
+        }
+      } catch {
+        // Preserve the claimed repair tab for observation rather than widening an ambiguous result.
+      }
+      return {ok:false,claimed:true,error:String(error?.message || error || 'TASK_BOX_CLEANUP_REPAIR_INCOMPLETE')};
+    }
+  }
+
+  function handleRecoveryMessage(message,sendResponse) {
+    if (!message || message.protocol !== PROTOCOL || typeof message.type !== 'string' ||
+        !message.type.startsWith('clf-task-box-recovery:')) return false;
+    if (message.type === 'clf-task-box-recovery:ping') {
+      sendResponse({ok:ensureExtensionRuntime(),protocol:PROTOCOL});
+      return false;
+    }
+    const work = message.type === 'clf-task-box-recovery:prepare'
+      ? cleanupRecoveryPreparation()
+      : message.type === 'clf-task-box-recovery:execute'
+        ? executeCleanupRecovery(message.requestId,message.generation)
+        : Promise.resolve({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_UNKNOWN_MESSAGE'});
+    work.then(sendResponse,error=>sendResponse({ok:false,error:String(error?.message || error),protocol:PROTOCOL}));
+    return true;
+  }
+
   function assertTaskBoxSidebarNotAmbiguous() {
     const contexts = taskBoxSidebarContexts();
     if (contexts.length > 1) throw new Error('TASK_BOX_AMBIGUOUS');
@@ -1431,6 +1494,10 @@
       try { incumbent.stop?.(); } catch {}
     }
     globalThis.__CLF_TASK_BOX_RUNTIME__ = runtimeHandle;
+    if (chrome.runtime?.onMessage?.addListener) {
+      recoveryMessageListener = (message,_sender,sendResponse) => handleRecoveryMessage(message,sendResponse);
+      chrome.runtime.onMessage.addListener(recoveryMessageListener);
+    }
 
     let lastUrl = location.href;
     globalThis.navigation?.addEventListener('navigate', invalidateNavigation, {signal:eventController.signal});

@@ -5,6 +5,7 @@
   const LEGACY_PREFIX = 'taskBoxCreationAttempt:';
   const CLEAR_ATTEMPT_PREFIX = 'taskBoxClearAttempt:';
   const MANUAL_RECOVERY_PREFIX = 'taskBoxManualRecovery:';
+  const CLEANUP_RECOVERY_PREFIX = 'taskBoxCleanupRecovery:';
 
   function create(storage) {
     if (!storage || typeof storage.get !== 'function' || typeof storage.set !== 'function') {
@@ -93,6 +94,78 @@
       });
     }
 
+    function cleanupRecoveryView(stored,requestId,generation) {
+      if (!validText(requestId) || !Number.isInteger(generation) || generation < 1) {
+        return fail('TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE');
+      }
+      const current = stored?.[GLOBAL_KEY];
+      const attempt = stored?.[`${CLEAR_ATTEMPT_PREFIX}${requestId}`];
+      const recovery = stored?.[`${CLEANUP_RECOVERY_PREFIX}${requestId}`];
+
+      if (recovery?.state === 'completed' && recovery.requestId === requestId &&
+          recovery.generation === generation && recovery.reason === 'orphaned-cleanup-reservation' &&
+          current?.state === 'present' && current.generation === generation) {
+        return {ok:true,alreadyRecovered:true,state:'present',generation};
+      }
+
+      if (recovery?.state === 'claimed' && recovery.requestId === requestId &&
+          recovery.generation === generation && recovery.reason === 'orphaned-cleanup-reservation' &&
+          validOwner(recovery.fromOwner) && validOwner(recovery.toOwner) &&
+          current?.state === 'reserved' && current.mode === 'cleanup' && current.requestId === requestId &&
+          current.generation === generation && ownerMatches(current,recovery.toOwner)) {
+        return {
+          ok:true,claimed:true,generation,
+          fromOwner:{...recovery.fromOwner},owner:{...recovery.toOwner},ticket:creationTicket(current)
+        };
+      }
+
+      if (recovery !== undefined) return fail('TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE');
+
+      // confirmDeletion() is the only production transition into cleanup reservation. It advances
+      // generation by one while the completed Clear attempt stays on the prior generation.
+      if (current?.state !== 'reserved' || current.mode !== 'cleanup' || current.requestId !== requestId ||
+          current.generation !== generation || !validOwner(current.owner) ||
+          attempt?.state !== 'completed' || attempt.kind !== 'clear' || attempt.requestId !== requestId ||
+          attempt.generation !== generation - 1 || !ownerMatches(attempt,current.owner)) {
+        return fail('TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE');
+      }
+      return {ok:true,available:true,generation,owner:{...current.owner},ticket:creationTicket(current)};
+    }
+
+    function cleanupRecoveryStatus(requestId,generation) {
+      return serial(async () => {
+        const stored = await storage.get([
+          GLOBAL_KEY,
+          `${CLEAR_ATTEMPT_PREFIX}${requestId}`,
+          `${CLEANUP_RECOVERY_PREFIX}${requestId}`
+        ]);
+        return cleanupRecoveryView(stored,requestId,generation);
+      });
+    }
+
+    function claimCleanupRecovery(owner,requestId,generation) {
+      return serial(async () => {
+        if (!validOwner(owner)) return fail('TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE');
+        const recoveryKey = `${CLEANUP_RECOVERY_PREFIX}${requestId}`;
+        const stored = await storage.get([GLOBAL_KEY,`${CLEAR_ATTEMPT_PREFIX}${requestId}`,recoveryKey]);
+        const view = cleanupRecoveryView(stored,requestId,generation);
+        if (!view.ok || view.alreadyRecovered) return view;
+        if (view.claimed) {
+          return ownerMatches({owner:view.owner},owner) ? view : fail('TASK_BOX_CLEANUP_RECOVERY_CLAIMED');
+        }
+        const current = stored?.[GLOBAL_KEY];
+        const next = {...current,owner:{tabId:owner.tabId,documentId:owner.documentId}};
+        const receipt = {
+          state:'claimed',requestId,generation,reason:'orphaned-cleanup-reservation',
+          fromOwner:{...view.owner},toOwner:{tabId:owner.tabId,documentId:owner.documentId}
+        };
+        await storage.set({[GLOBAL_KEY]:next,[recoveryKey]:receipt});
+        return {
+          ok:true,claimed:true,generation,fromOwner:{...view.owner},owner:{...next.owner},ticket:creationTicket(next)
+        };
+      });
+    }
+
     async function readGlobal() {
       const stored = await storage.get(GLOBAL_KEY);
       return stored?.[GLOBAL_KEY];
@@ -131,12 +204,27 @@
     function completeCreation(owner,ticket) {
       return serial(async () => {
         if (!validOwner(owner) || !validCreationTicket(ticket)) return fail('INVALID_CREATION_COMPLETION');
-        const current = await readGlobal();
+        const recoveryKey = ticket.mode === 'cleanup' ? `${CLEANUP_RECOVERY_PREFIX}${ticket.requestId}` : null;
+        const stored = recoveryKey ? await storage.get([GLOBAL_KEY,recoveryKey]) : await storage.get(GLOBAL_KEY);
+        const current = stored?.[GLOBAL_KEY];
         if (current?.state !== 'reserved' || !ownerMatches(current,owner) || !sameCreationTicket(current,ticket)) {
           return fail('TASK_BOX_CREATION_NOT_RESERVED');
         }
         const next = {state:'present',generation:current.generation};
-        await storage.set({[GLOBAL_KEY]:next});
+        const recovery = recoveryKey ? stored?.[recoveryKey] : null;
+        if (recovery !== undefined) {
+          if (recovery?.state !== 'claimed' || recovery.requestId !== ticket.requestId ||
+              recovery.generation !== ticket.generation || recovery.reason !== 'orphaned-cleanup-reservation' ||
+              !ownerMatches({owner:recovery.toOwner},owner)) {
+            return fail('TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE');
+          }
+          await storage.set({
+            [GLOBAL_KEY]:next,
+            [recoveryKey]:{...recovery,state:'completed'}
+          });
+        } else {
+          await storage.set({[GLOBAL_KEY]:next});
+        }
         return {ok:true,completed:true,state:'present',generation:next.generation};
       });
     }
@@ -221,9 +309,11 @@
 
     return {
       observePresent,reserveWorker,completeCreation,beginDeletion,pendingClear,clearCompleted,confirmDeletion,
-      manualDeletionRecoveryStatus,recoverManualDeletion
+      manualDeletionRecoveryStatus,recoverManualDeletion,cleanupRecoveryStatus,claimCleanupRecovery
     };
   }
 
-  globalThis.CLFTaskBoxCoordinator = Object.freeze({create,GLOBAL_KEY,CLEAR_ATTEMPT_PREFIX,MANUAL_RECOVERY_PREFIX});
+  globalThis.CLFTaskBoxCoordinator = Object.freeze({
+    create,GLOBAL_KEY,CLEAR_ATTEMPT_PREFIX,MANUAL_RECOVERY_PREFIX,CLEANUP_RECOVERY_PREFIX
+  });
 })();

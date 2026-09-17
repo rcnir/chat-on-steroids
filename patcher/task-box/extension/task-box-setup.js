@@ -3,20 +3,26 @@
   const byId = id => document.getElementById(id);
   let available = false;
   let recovery = null;
+  let cleanupRecovery = null;
   let busy = false;
   function paintButton() {
-    byId('enable').disabled = busy || recovery !== null || !available || !byId('oldDisabled').checked || !byId('reviewed').checked;
+    byId('enable').disabled = busy || recovery !== null || cleanupRecovery !== null || !available || !byId('oldDisabled').checked || !byId('reviewed').checked;
     byId('recover').disabled = busy || recovery === null || !byId('recoveryReviewed').checked || !byId('manualDeleted').checked;
+    byId('recoverCleanup').disabled = busy || cleanupRecovery === null || !byId('cleanupReviewed').checked || !byId('inactiveRepairApproved').checked;
   }
   async function refresh() {
     try {
       const state = await chrome.runtime.sendMessage({type:'clf-task-box-setup:status'});
       recovery = state?.ok === true && state.recoveryRequired === true && typeof state.recoveryRequestId === 'string' &&
         Number.isInteger(state.recoveryGeneration) ? {requestId:state.recoveryRequestId,generation:state.recoveryGeneration} : null;
-      byId('cutover').hidden = recovery !== null;
+      cleanupRecovery = state?.ok === true && state.cleanupRecoveryRequired === true && typeof state.cleanupRecoveryRequestId === 'string' &&
+        Number.isInteger(state.cleanupRecoveryGeneration) ? {requestId:state.cleanupRecoveryRequestId,generation:state.cleanupRecoveryGeneration} : null;
+      byId('cutover').hidden = recovery !== null || cleanupRecovery !== null;
       byId('recovery').hidden = recovery === null;
-      available = recovery === null && state?.ok === true && state.available === true && state.enabled !== true;
-      byId('status').textContent = recovery ?
+      byId('cleanupRecovery').hidden = cleanupRecovery === null;
+      available = recovery === null && cleanupRecovery === null && state?.ok === true && state.available === true && state.enabled !== true;
+      byId('status').textContent = cleanupRecovery ?
+        'ClearとProject削除は完了していますが、TASK BOX再作成ticketだけが旧documentに残っています。下の専用復旧で再作成だけを完了できます。' : recovery ?
         '完了済みClearのbrowser lifecycleが残っています。TASK BOX Projectを手動削除済みの場合だけ、下の専用復旧を実行できます。' :
         state?.enabled && state?.available ? '統合版は有効です。TASK BOXページを一度読み込み直してください。' :
         state?.enabled ? '設定は有効ですが、現在は対応アプリへの接続を確認できません。BOX CLEARは押さないでください。' :
@@ -24,7 +30,7 @@
         `まだ有効化できません：${state?.error || '対応するアプリが未反映です。'}`;
     } catch {
       byId('status').textContent='拡張との接続が切れました。この設定ページを読み込み直してください。';
-      available=false;recovery=null;byId('cutover').hidden=false;byId('recovery').hidden=true;
+      available=false;recovery=null;cleanupRecovery=null;byId('cutover').hidden=false;byId('recovery').hidden=true;byId('cleanupRecovery').hidden=true;
     }
     paintButton();
   }
@@ -32,6 +38,8 @@
   byId('reviewed').addEventListener('change',paintButton);
   byId('recoveryReviewed').addEventListener('change',paintButton);
   byId('manualDeleted').addEventListener('change',paintButton);
+  byId('cleanupReviewed').addEventListener('change',paintButton);
+  byId('inactiveRepairApproved').addEventListener('change',paintButton);
   byId('enable').addEventListener('click',async () => {
     if (byId('enable').disabled) return;
     busy=true;paintButton();
@@ -60,6 +68,26 @@
       }
     } catch {
       byId('status').textContent='復旧結果を確認できません。再クリックせず、このページを読み込み直して状態を確認してください。';
+    }
+    busy=false;paintButton();
+  });
+  byId('recoverCleanup').addEventListener('click',async () => {
+    if (byId('recoverCleanup').disabled || cleanupRecovery === null) return;
+    const target=cleanupRecovery;
+    busy=true;paintButton();
+    try {
+      const reply=await chrome.runtime.sendMessage({
+        type:'clf-task-box-setup:recover-cleanup',requestId:target.requestId,generation:target.generation,
+        previousOutcomeReviewed:byId('cleanupReviewed').checked,
+        inactiveRepairTabApproved:byId('inactiveRepairApproved').checked
+      });
+      if (!reply?.ok) {
+        byId('status').textContent=`復旧を停止しました：${reply?.error || '不明な結果'}`;
+      } else {
+        await refresh();
+      }
+    } catch {
+      byId('status').textContent='再作成の復旧結果を確認できません。再クリックせず、修復タブと状態を確認してください。';
     }
     busy=false;paintButton();
   });

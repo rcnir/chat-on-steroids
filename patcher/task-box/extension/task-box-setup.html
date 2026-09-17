@@ -29,6 +29,13 @@
     <button id="recover" type="button" disabled>手動削除済み状態を復旧する</button>
     <small>この操作は、同じrequestのClear完了receiptをアプリ側でも再確認できた場合にだけ実行できます。古いreceiptは再実行防止のため保持されます。</small>
   </section>
+  <section id="cleanupRecovery" hidden>
+    <p>Clear後のTASK BOX再作成だけが旧documentに取り残れています。過去のClearやProject削除は再実行せず、新しい非アクティブ修復タブでTASK BOX作成だけを完了します。</p>
+    <label><input id="cleanupReviewed" type="checkbox">表示された処理を確認し、ClearとProject削除は再実行せず、残っているcleanup ticketだけを復旧することを確認しました。</label>
+    <label><input id="inactiveRepairApproved" type="checkbox">現在のチャットを操作せず、別の非アクティブChatGPT修復タブを1枚だけ使うことを確認しました。</label>
+    <button id="recoverCleanup" type="button" disabled>再作成だけを安全に復旧する</button>
+    <small>旧owner documentの不在、同一requestのClear完了receipt、generation整合を再確認できた場合だけticketを修復タブへ移譲します。作成結果が不明な場合は再クリックせず、同じ修復タブを保持します。</small>
+  </section>
   <script src="task-box-setup.js"></script>
 </body>
 </html>

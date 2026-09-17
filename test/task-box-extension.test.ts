@@ -131,10 +131,15 @@ async function makeContent(
   const dom = new JSDOM(html, { url: `https://chatgpt.com/c/${conversationId}`, runScripts: 'outside-only' });
   const { window } = dom;
   (window as any).__CLF_TASK_BOX_TEST__ = true;
+  const runtimeListeners = new Set<(message: any, sender: any, sendResponse: (value: any) => void) => boolean | void>();
   const runtime: any = {
     id: 'companion-test',
     getManifest: () => ({ version: '2.0.6' }),
-    sendMessage: (message: any) => background.api.handle(message, sender)
+    sendMessage: (message: any) => background.api.handle(message, sender),
+    onMessage: {
+      addListener(listener: any) { runtimeListeners.add(listener); },
+      removeListener(listener: any) { runtimeListeners.delete(listener); }
+    }
   };
   (window as any).chrome = {
     storage: { local: background.storage.local, onChanged: background.storage.onChanged },
@@ -151,6 +156,18 @@ async function makeContent(
     document: window.document,
     hooks: (window as any).CLFTaskBoxTestHooks,
     runtime,
+    dispatchRuntimeMessage(message: any) {
+      return new Promise<any>((resolve) => {
+        let settled = false;
+        const sendResponse = (value: any) => { if (!settled) { settled = true; resolve(value); } };
+        for (const listener of runtimeListeners) {
+          const async = listener(message, { id: 'companion-test' }, sendResponse);
+          if (settled) return;
+          if (async === true) return;
+        }
+        if (!settled) resolve(undefined);
+      });
+    },
     started
   };
 }
@@ -519,9 +536,256 @@ describe('companion TASK BOX bridge and lifecycle', () => {
     expect(h.storage.data).toEqual(seed);
     expect(h.calls).toHaveLength(0);
   });
+
+  it('moves one exact orphaned cleanup reservation to a new owner and completes it without replaying Clear', async () => {
+    const oldOwner = { tabId: 17, documentId: 'document-17' };
+    const newOwner = { tabId: 99, documentId: 'repair-document' };
+    const seed = {
+      [FEATURE]: true,
+      [GLOBAL]: {
+        state: 'reserved', generation: 15, mode: 'cleanup', requestId: requestOne, owner: oldOwner
+      },
+      [`taskBoxClearAttempt:${requestOne}`]: {
+        state: 'completed', generation: 14, requestId: requestOne, kind: 'clear', owner: oldOwner
+      }
+    };
+    const h = makeBackground(seed);
+    const coordinator = h.coordinator.create(h.storage.local);
+
+    expect(await coordinator.cleanupRecoveryStatus(requestOne, 15)).toMatchObject({
+      ok: true, available: true, generation: 15, owner: oldOwner,
+      ticket: { generation: 15, requestId: requestOne, mode: 'cleanup' }
+    });
+    const claimed = await coordinator.claimCleanupRecovery(newOwner, requestOne, 15);
+    expect(claimed).toMatchObject({
+      ok: true, claimed: true, generation: 15, owner: newOwner, fromOwner: oldOwner,
+      ticket: { generation: 15, requestId: requestOne, mode: 'cleanup' }
+    });
+    expect(h.storage.data[GLOBAL]).toMatchObject({ state: 'reserved', generation: 15, mode: 'cleanup', owner: newOwner });
+    expect(h.storage.data[`taskBoxCleanupRecovery:${requestOne}`]).toMatchObject({
+      state: 'claimed', requestId: requestOne, generation: 15,
+      reason: 'orphaned-cleanup-reservation', fromOwner: oldOwner, toOwner: newOwner
+    });
+
+    expect(await coordinator.completeCreation(newOwner, claimed.ticket)).toMatchObject({ ok: true, completed: true, state: 'present' });
+    expect(h.storage.data[GLOBAL]).toEqual({ state: 'present', generation: 15 });
+    expect(h.storage.data[`taskBoxCleanupRecovery:${requestOne}`]).toMatchObject({ state: 'completed' });
+    expect(await coordinator.cleanupRecoveryStatus(requestOne, 15)).toMatchObject({
+      ok: true, alreadyRecovered: true, state: 'present', generation: 15
+    });
+    expect(h.calls.filter((entry) => entry.path === '/task-box/clear')).toHaveLength(0);
+  });
+
+  it('never claims cleanup recovery without the exact prior completed Clear attempt', async () => {
+    const oldOwner = { tabId: 17, documentId: 'document-17' };
+    const newOwner = { tabId: 99, documentId: 'repair-document' };
+    for (const attempt of [
+      undefined,
+      { state: 'reserved', generation: 14, requestId: requestOne, kind: 'clear', owner: oldOwner },
+      { state: 'completed', generation: 13, requestId: requestOne, kind: 'clear', owner: oldOwner },
+      { state: 'completed', generation: 14, requestId: requestNew, kind: 'clear', owner: oldOwner }
+    ]) {
+      const seed: Record<string, unknown> = {
+        [FEATURE]: true,
+        [GLOBAL]: { state: 'reserved', generation: 15, mode: 'cleanup', requestId: requestOne, owner: oldOwner }
+      };
+      if (attempt) seed[`taskBoxClearAttempt:${requestOne}`] = attempt;
+      const h = makeBackground(seed);
+      const coordinator = h.coordinator.create(h.storage.local);
+      const before = structuredClone(h.storage.data);
+      expect(await coordinator.claimCleanupRecovery(newOwner, requestOne, 15))
+        .toMatchObject({ ok: false, error: 'TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE' });
+      expect(h.storage.data).toEqual(before);
+    }
+  });
+
+  it('requires the exact completed app receipt and a dead old document before cleanup recovery can start', async () => {
+    const oldOwner = { tabId: 17, documentId: 'document-17' };
+    const seed = {
+      [FEATURE]: true,
+      [GLOBAL]: { state: 'reserved', generation: 15, mode: 'cleanup', requestId: requestOne, owner: oldOwner },
+      [`taskBoxClearAttempt:${requestOne}`]: {
+        state: 'completed', generation: 14, requestId: requestOne, kind: 'clear', owner: oldOwner
+      }
+    };
+    const noReceipt = makeBackground(seed, async (route) => {
+      if (route.startsWith('/task-box/clear/status?')) {
+        return { ok: true, data: { ok: true, status: 'incomplete', requestId: requestOne, protocol: PROTOCOL } };
+      }
+      throw new Error(`unexpected ${route}`);
+    });
+    expect(await noReceipt.api.cleanupRecoveryStatus(requestOne, 15))
+      .toMatchObject({ ok: false, error: 'TASK_BOX_CLEANUP_RECOVERY_NOT_AVAILABLE' });
+
+    const ownerAlive = makeBackground(seed, async (route) => {
+      if (route.startsWith('/task-box/clear/status?')) {
+        return { ok: true, data: { ok: true, status: 'completed', requestId: requestOne, protocol: PROTOCOL } };
+      }
+      throw new Error(`unexpected ${route}`);
+    });
+    (ownerAlive.chrome as any).tabs = {
+      sendMessage: vi.fn(async () => ({ ok: true, protocol: PROTOCOL }))
+    };
+    expect(await ownerAlive.api.cleanupRecoveryStatus(requestOne, 15))
+      .toMatchObject({ ok: false, error: 'TASK_BOX_CLEANUP_OWNER_STILL_LIVE' });
+    expect(ownerAlive.storage.data).toEqual(seed);
+  });
+
+  it('uses one inactive repair tab to finish an orphaned cleanup and closes only that tab on success', async () => {
+    const oldOwner = { tabId: 17, documentId: 'document-17' };
+    const repairSender = {
+      tab: { id: 99 }, frameId: 0, documentId: 'repair-document', url: 'https://chatgpt.com/'
+    };
+    const seed = {
+      [FEATURE]: true,
+      [GLOBAL]: { state: 'reserved', generation: 15, mode: 'cleanup', requestId: requestOne, owner: oldOwner },
+      [`taskBoxClearAttempt:${requestOne}`]: {
+        state: 'completed', generation: 14, requestId: requestOne, kind: 'clear', owner: oldOwner
+      }
+    };
+    const h = makeBackground(seed, async (route) => {
+      if (route.startsWith('/task-box/clear/status?')) {
+        return { ok: true, data: { ok: true, status: 'completed', requestId: requestOne, protocol: PROTOCOL } };
+      }
+      throw new Error(`unexpected ${route}`);
+    });
+    const removed: number[] = [];
+    (h.chrome as any).tabs = {
+      create: vi.fn(async (options: any) => ({ id: 99, url: options.url, status: 'complete', active: options.active })),
+      get: vi.fn(async (id: number) => ({ id, url: 'https://chatgpt.com/', status: 'complete' })),
+      remove: vi.fn(async (id: number) => { removed.push(id); }),
+      sendMessage: vi.fn(async (id: number, message: any, options?: any) => {
+        if (id === oldOwner.tabId && options?.documentId === oldOwner.documentId) throw new Error('No document');
+        if (id !== 99) throw new Error('Unexpected tab');
+        if (message.type === 'clf-task-box-recovery:prepare') return { ok: true, ready: true };
+        if (message.type === 'clf-task-box-recovery:execute') {
+          const claim = await h.api.handle({
+            type: 'clf-task-box:claim-cleanup-recovery', protocol: PROTOCOL, requestId: requestOne, generation: 15
+          }, repairSender);
+          expect(claim).toMatchObject({ ok: true, claimed: true });
+          const completed = await h.api.handle({
+            type: 'clf-task-box:complete-create', protocol: PROTOCOL, ticket: claim.ticket
+          }, repairSender);
+          expect(completed).toMatchObject({ ok: true, completed: true, state: 'present' });
+          return { ok: true, claimed: true, completed: true };
+        }
+        throw new Error(`Unexpected message ${message.type}`);
+      })
+    };
+    (h.chrome as any).scripting = { executeScript: vi.fn(async () => []) };
+
+    expect(await h.api.recoverCleanupReservation(requestOne, 15)).toMatchObject({
+      ok: true, recovered: true, state: 'present', generation: 15, repairTabClosed: true
+    });
+    expect((h.chrome as any).tabs.create).toHaveBeenCalledWith({ url: 'https://chatgpt.com/', active: false });
+    expect(removed).toEqual([99]);
+    expect(h.storage.data[GLOBAL]).toEqual({ state: 'present', generation: 15 });
+    expect(h.calls.filter((entry) => entry.path === '/task-box/clear')).toHaveLength(0);
+  });
+
+  it('keeps the repair tab when creation is uncertain after the cleanup ticket was claimed', async () => {
+    const oldOwner = { tabId: 17, documentId: 'document-17' };
+    const repairSender = {
+      tab: { id: 99 }, frameId: 0, documentId: 'repair-document', url: 'https://chatgpt.com/'
+    };
+    const seed = {
+      [FEATURE]: true,
+      [GLOBAL]: { state: 'reserved', generation: 15, mode: 'cleanup', requestId: requestOne, owner: oldOwner },
+      [`taskBoxClearAttempt:${requestOne}`]: {
+        state: 'completed', generation: 14, requestId: requestOne, kind: 'clear', owner: oldOwner
+      }
+    };
+    const h = makeBackground(seed, async (route) => {
+      if (route.startsWith('/task-box/clear/status?')) {
+        return { ok: true, data: { ok: true, status: 'completed', requestId: requestOne, protocol: PROTOCOL } };
+      }
+      throw new Error(`unexpected ${route}`);
+    });
+    const remove = vi.fn(async () => undefined);
+    (h.chrome as any).tabs = {
+      create: vi.fn(async () => ({ id: 99, url: 'https://chatgpt.com/', status: 'complete', active: false })),
+      get: vi.fn(async (id: number) => ({ id, url: 'https://chatgpt.com/', status: 'complete' })),
+      remove,
+      sendMessage: vi.fn(async (id: number, message: any, options?: any) => {
+        if (id === oldOwner.tabId && options?.documentId === oldOwner.documentId) throw new Error('No document');
+        if (message.type === 'clf-task-box-recovery:prepare') return { ok: true, ready: true };
+        if (message.type === 'clf-task-box-recovery:execute') {
+          const claim = await h.api.handle({
+            type: 'clf-task-box:claim-cleanup-recovery', protocol: PROTOCOL, requestId: requestOne, generation: 15
+          }, repairSender);
+          expect(claim).toMatchObject({ ok: true, claimed: true });
+          return { ok: false, claimed: true, error: 'CREATE_OUTCOME_UNKNOWN' };
+        }
+        throw new Error('unexpected message');
+      })
+    };
+    (h.chrome as any).scripting = { executeScript: vi.fn(async () => []) };
+
+    expect(await h.api.recoverCleanupReservation(requestOne, 15)).toMatchObject({
+      ok: false, error: 'CREATE_OUTCOME_UNKNOWN', repairTabId: 99, claimed: true
+    });
+    expect(remove).not.toHaveBeenCalled();
+    expect(h.storage.data[GLOBAL]).toMatchObject({ state: 'reserved', mode: 'cleanup', owner: { tabId: 99, documentId: 'repair-document' } });
+  });
 });
 
 describe('companion TASK BOX page behavior', () => {
+  it('prepares cleanup recovery without mutation, then claims once and recreates TASK BOX in the repair document', async () => {
+    const oldOwner = { tabId: 88, documentId: 'old-document' };
+    const h = await makeContent(
+      `<nav id="sidebar"><button id="new-project" aria-label="New project">+</button></nav><div id="portal"></div>`,
+      {
+        [FEATURE]: true,
+        [GLOBAL]: { state: 'reserved', generation: 15, mode: 'cleanup', requestId: requestOne, owner: oldOwner },
+        [`taskBoxClearAttempt:${requestOne}`]: {
+          state: 'completed', generation: 14, requestId: requestOne, kind: 'clear', owner: oldOwner
+        }
+      },
+      async (route) => {
+        if (route.startsWith('/task-box/clear/status?')) {
+          return { ok: true, data: { ok: true, status: 'completed', requestId: requestOne, protocol: PROTOCOL } };
+        }
+        throw new Error(`unexpected ${route}`);
+      }
+    );
+    h.document.getElementById('new-project')!.addEventListener('click', () => {
+      const dialog = h.document.createElement('dialog');
+      dialog.setAttribute('open', '');
+      const input = h.document.createElement('input');
+      input.type = 'text'; input.id = 'project-name'; input.name = 'projectName'; input.placeholder = 'コペンハーゲン旅行';
+      const label = h.document.createElement('label');
+      label.htmlFor = input.id; label.textContent = 'プロジェクト名';
+      const save = h.document.createElement('button');
+      save.type = 'submit'; save.textContent = 'プロジェクトを作成する'; save.disabled = true;
+      input.addEventListener('input', () => { save.disabled = input.value !== 'TASK BOX'; });
+      save.addEventListener('click', () => {
+        const shell = h.document.createElement('div');
+        shell.innerHTML = taskRow(input.value, 'task-repaired');
+        h.document.getElementById('sidebar')!.insertBefore(shell.firstElementChild!, h.document.getElementById('new-project'));
+        dialog.remove();
+      });
+      dialog.append(label, input, save);
+      h.document.getElementById('portal')!.append(dialog);
+    });
+
+    const before = structuredClone(h.storage.data[GLOBAL]);
+    expect(await h.dispatchRuntimeMessage({
+      type: 'clf-task-box-recovery:prepare', protocol: PROTOCOL, requestId: requestOne, generation: 15
+    })).toMatchObject({ ok: true, ready: true, existing: false });
+    expect(h.storage.data[GLOBAL]).toEqual(before);
+    expect(h.document.querySelector('[data-row="task-repaired"]')).toBeNull();
+
+    expect(await h.dispatchRuntimeMessage({
+      type: 'clf-task-box-recovery:execute', protocol: PROTOCOL, requestId: requestOne, generation: 15
+    })).toMatchObject({ ok: true, claimed: true, completed: true, existing: false });
+    expect(h.storage.data[GLOBAL]).toEqual({ state: 'present', generation: 15 });
+    expect(h.storage.data[`taskBoxCleanupRecovery:${requestOne}`]).toMatchObject({
+      state: 'completed', fromOwner: oldOwner, toOwner: { tabId: 17, documentId: 'document-17' }
+    });
+    expect(h.document.querySelector('[data-row="task-repaired"]')).not.toBeNull();
+    closeContent(h);
+  });
+
   it('recognizes native open dialogs and associated name labels without treating a placeholder or unrelated input as identity', async () => {
     const h = await makeContent('<dialog id="closed"><input type="text" aria-label="Project name"></dialog><dialog open id="create"><label for="real-name">プロジェクト名</label><input id="unrelated" placeholder="Project name"><input id="real-name" type="text" placeholder="コペンハーゲン旅行"></dialog>', { [FEATURE]: true });
     expect(h.hooks.openProjectDialogs().map((x: Element) => x.id)).toEqual(['create']);
@@ -619,7 +883,7 @@ describe('companion TASK BOX page behavior', () => {
     await h.window.CLFTaskBox.start();
     const current = h.window.__CLF_TASK_BOX_RUNTIME__;
     expect(current).not.toBe(old);
-    expect(current.adapterRevision).toBe(3);
+    expect(current.adapterRevision).toBe(4);
     expect(stops).toBe(1);
     h.window.eval(contentSource);
     await h.window.CLFTaskBox.start();

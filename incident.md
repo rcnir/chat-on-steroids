@@ -194,6 +194,52 @@ a one-shot best effort into eventual self-healing on normal traffic.
 The repair is prepared on the feature branch only. It is not merged to canonical `main` until Human
 approval.
 
+### Follow-up finding
+
+After 1.0.9 was activated and normal activity successfully retried TASK BOX injection, the latest UI
+diagnostic became `TASK_BOX_LIFECYCLE_BLOCKED`. The visible absence was therefore not only an injection
+problem. A prior Clear had already completed and the TASK BOX Project deletion had advanced the
+lifecycle to `reserved / mode=cleanup`, but the owning ChatGPT document disappeared before Project
+recreation completed. 1.0.9 correctly restored the content runtime; that runtime then correctly refused
+to show actionable TASK BOX controls while the durable cleanup reservation remained unresolved.
+
+## 2026-09-17 — completed Clear left an orphaned cleanup reservation after owner document loss
+
+### Scope
+
+TASK BOX lifecycle after an earlier BOX CLEAR on Chat On Steroids 2.1.11. The app-side Clear receipt was
+durably completed and TASK BOX Project deletion had already been confirmed.
+
+### What happened
+
+The browser lifecycle reached `reserved / mode=cleanup` for the Project-recreation ticket. Its owner was
+the exact tab/document that performed the Clear flow. That document later disappeared. The reservation
+therefore remained durable but no live document could consume it, leaving TASK BOX fail-closed with
+`TASK_BOX_LIFECYCLE_BLOCKED`.
+
+### Impact
+
+No Clear was replayed and no additional Project deletion occurred. TASK BOX stayed unavailable because
+the state machine correctly refused to invent a new owner for an existing mutation ticket. Worker-chat
+filing into TASK BOX also could not resume while the Project recreation was incomplete.
+
+### Cause
+
+Normal cleanup creation is intentionally owner-bound. `confirmDeletion()` advances the lifecycle by one
+generation and reserves the cleanup creation ticket to the current document. The prior implementation
+had no narrowly-scoped recovery transition for the case where all destructive work was already proved
+complete but that exact creation owner no longer existed.
+
+### Forward repair
+
+TASK BOX 1.0.10 / adapter revision 7 adds an explicit orphaned-cleanup recovery path. It can run only
+when all of the following are re-proved: the global state is the exact cleanup reservation, the prior
+generation's Clear attempt is completed for the same request and old owner, the app reports that exact
+Clear receipt completed, and the old exact document no longer answers. Only then may a dedicated
+inactive repair tab claim the same creation ticket. The repair tab performs Project creation only; it
+never repeats Clear or Project deletion. A claimed repair with an uncertain creation outcome is kept
+open for reconciliation rather than creating another Project.
+
 ## 2026-09-16 — Browser refusal caused unintended native Desktop fallback and moved the Human pointer
 
 ### Scope
