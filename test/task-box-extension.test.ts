@@ -768,7 +768,14 @@ describe('companion TASK BOX bridge and lifecycle', () => {
             type: 'clf-task-box:claim-cleanup-recovery', protocol: PROTOCOL, requestId: requestOne, generation: 15
           }, repairSender);
           expect(claim).toMatchObject({ ok: true });
-          if (executeCount === 1) throw new Error('response lost after durable claim');
+          throw new Error('response lost after durable claim');
+        }
+        if (message.type === 'clf-task-box-recovery:reconcile') {
+          executeCount += 1;
+          const claim = await h.api.handle({
+            type: 'clf-task-box:claim-cleanup-recovery', protocol: PROTOCOL, requestId: requestOne, generation: 15
+          }, repairSender);
+          expect(claim).toMatchObject({ ok: true });
           const completed = await h.api.handle({
             type: 'clf-task-box:complete-create', protocol: PROTOCOL, ticket: claim.ticket
           }, repairSender);
@@ -798,6 +805,43 @@ describe('companion TASK BOX bridge and lifecycle', () => {
 });
 
 describe('companion TASK BOX page behavior', () => {
+  it('reconciles a claimed cleanup without clicking Create again', async () => {
+    const oldOwner = { tabId: 88, documentId: 'old-document' };
+    const repairOwner = { tabId: 17, documentId: 'document-17' };
+    const h = await makeContent(
+      `<nav id="sidebar"><button id="new-project" aria-label="New project">+</button></nav><div id="portal"></div>`,
+      {
+        [FEATURE]: true,
+        [GLOBAL]: { state: 'reserved', generation: 15, mode: 'cleanup', requestId: requestOne, owner: repairOwner },
+        [`taskBoxClearAttempt:${requestOne}`]: {
+          state: 'completed', generation: 14, requestId: requestOne, kind: 'clear', owner: oldOwner
+        },
+        [`taskBoxCleanupRecovery:${requestOne}`]: {
+          state: 'claimed', requestId: requestOne, generation: 15, reason: 'orphaned-cleanup-reservation',
+          fromOwner: oldOwner, toOwner: repairOwner
+        }
+      }
+    );
+    let createClicks = 0;
+    h.document.getElementById('new-project')!.addEventListener('click', () => { createClicks += 1; });
+
+    expect(await h.dispatchRuntimeMessage({
+      type: 'clf-task-box-recovery:reconcile', protocol: PROTOCOL, requestId: requestOne, generation: 15
+    })).toMatchObject({ ok: false, claimed: true, error: 'TASK_BOX_CLEANUP_REPAIR_RECONCILE_MISSING' });
+    expect(createClicks).toBe(0);
+    expect(h.storage.data[GLOBAL]).toMatchObject({ state: 'reserved', owner: repairOwner });
+
+    const shell = h.document.createElement('div');
+    shell.innerHTML = taskRow('TASK BOX', 'task-reconciled');
+    h.document.getElementById('sidebar')!.insertBefore(shell.firstElementChild!, h.document.getElementById('new-project'));
+    expect(await h.dispatchRuntimeMessage({
+      type: 'clf-task-box-recovery:reconcile', protocol: PROTOCOL, requestId: requestOne, generation: 15
+    })).toMatchObject({ ok: true, claimed: true, completed: true, reconciled: true });
+    expect(createClicks).toBe(0);
+    expect(h.storage.data[GLOBAL]).toEqual({ state: 'present', generation: 15 });
+    closeContent(h);
+  });
+
   it('prepares cleanup recovery without mutation, then claims once and recreates TASK BOX in the repair document', async () => {
     const oldOwner = { tabId: 88, documentId: 'old-document' };
     const h = await makeContent(

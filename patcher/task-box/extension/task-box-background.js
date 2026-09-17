@@ -228,7 +228,8 @@
           return reply({ok:false,error:prepared?.error || 'TASK_BOX_CLEANUP_REPAIR_NOT_READY'});
         }
         const executed = await chrome.tabs.sendMessage(repairTabId,{
-          type:'clf-task-box-recovery:execute',protocol:PROTOCOL,requestId,generation
+          type:claimed ? 'clf-task-box-recovery:reconcile' : 'clf-task-box-recovery:execute',
+          protocol:PROTOCOL,requestId,generation
         });
         claimed = executed?.claimed === true;
         if (executed?.ok !== true || executed.completed !== true) {

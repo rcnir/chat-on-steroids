@@ -911,6 +911,24 @@
     }
   }
 
+  async function reconcileCleanupRecovery(requestId,generation) {
+    requireExtensionRuntime();
+    const claim = await taskBoxMessage('claim-cleanup-recovery',{requestId,generation});
+    if (!claim?.ok || !claim.ticket) {
+      return {ok:false,claimed:false,error:claim?.error || 'TASK_BOX_CLEANUP_RECOVERY_CLAIM_FAILED'};
+    }
+    try {
+      const existing = assertTaskBoxSidebarNotAmbiguous();
+      if (existing.length !== 1) {
+        return {ok:false,claimed:true,error:'TASK_BOX_CLEANUP_REPAIR_RECONCILE_MISSING'};
+      }
+      await completeCreation(claim.ticket);
+      return {ok:true,claimed:true,completed:true,existing:true,reconciled:true};
+    } catch (error) {
+      return {ok:false,claimed:true,error:String(error?.message || error || 'TASK_BOX_CLEANUP_REPAIR_RECONCILE_FAILED')};
+    }
+  }
+
   function handleRecoveryMessage(message,sendResponse) {
     if (!message || message.protocol !== PROTOCOL || typeof message.type !== 'string' ||
         !message.type.startsWith('clf-task-box-recovery:')) return false;
@@ -922,7 +940,9 @@
       ? cleanupRecoveryPreparation()
       : message.type === 'clf-task-box-recovery:execute'
         ? executeCleanupRecovery(message.requestId,message.generation)
-        : Promise.resolve({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_UNKNOWN_MESSAGE'});
+        : message.type === 'clf-task-box-recovery:reconcile'
+          ? reconcileCleanupRecovery(message.requestId,message.generation)
+          : Promise.resolve({ok:false,error:'TASK_BOX_CLEANUP_RECOVERY_UNKNOWN_MESSAGE'});
     work.then(sendResponse,error=>sendResponse({ok:false,error:String(error?.message || error),protocol:PROTOCOL}));
     return true;
   }
